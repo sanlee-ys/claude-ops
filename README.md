@@ -1,0 +1,95 @@
+# claude-ops
+
+Field notes on running an agentic coding CLI as a real teammate on a real
+machine, with real credentials sitting nearby — written by one engineer,
+for one machine, published because the failure modes don't stay put.
+
+## Why this exists
+
+Agentic CLIs like Claude Code don't just edit files anymore. They run shell
+commands, read arbitrary config, call MCP servers with live tokens in their
+environment, and fan out into multi-agent workflows that can spend real money
+in minutes. That combination — broad tool access plus standing credentials —
+is a live security surface, and it's under-documented. Most of what's written
+about it is either marketing ("agents are safe by design") or after-the-fact
+incident response at a company that isn't going to publish its postmortems.
+
+This repo is neither. It's the operating layer that grew out of actually
+running Claude Code day to day on one machine: a security posture, a
+`PreToolUse` hook that enforces part of it mechanically, six incident
+postmortems written in blameless format with the failures left in, five
+reusable skills, and the working agreements (how work gets scoped, how
+parallel sessions stay out of each other's way) that the posture and the
+incidents both assume.
+
+Three of the six postmortems are credential exposures — one of them covering
+two separate leaks of the same GitHub PAT — for four exposure events in one
+week, three of them the *same* credential leaking through a *different* tool
+or command shape each time, because the guard that closed the previous gap
+was scoped to the surface someone had thought to enumerate, not to the
+surface that actually existed. That pattern — a mechanical control that's
+only as complete as its author's imagination — is the throughline of this
+repo, and it's also the reason the guard's own source is published here
+rather than kept private. Security through "attacker doesn't know the rules"
+doesn't hold on a machine where the attacker already has local execution;
+the guard's value is defense-in-depth, not secrecy, so publishing it costs
+nothing and might get the next gap found by a reader instead of a leak.
+
+## Map
+
+- **`operating-model.md`** — the working agreements this all runs on: DCB
+  (Direction / Contracts / Bar) as the scoping discipline for ambiguous work,
+  a session pre-flight checklist (sync before touching anything, one concern
+  per branch), and the protocol for running several sessions in parallel
+  across machines that only share a git remote.
+- **`security/`**
+  - `posture.md` — the layered security model: permission allowlist design,
+    escape hatches, and the standing rule that credential-touching commands
+    (token rotation, key generation) are run by the human directly, never
+    through a tool call.
+  - `credential-guard.py` — the published `PreToolUse` hook. Blocks bulk
+    environment dumps and reads of known-sensitive files (shell config,
+    SSH keys, cloud CLI credential stores, `.env` files) across Bash,
+    PowerShell, Read, and content-mode Grep. What it covers is also, by
+    omission, a map of what it doesn't — that's discussed openly in
+    `security/README.md` and in the incidents.
+  - `README.md` — how the hook is wired in, what it does and doesn't cover,
+    and the override convention for legitimate reads it blocks.
+- **`incidents/`** — six blameless postmortems, each with a 5-whys and a
+  fixes-applied table:
+  - `2026-07-02-plaintext-api-key-exposure.md`
+  - `2026-07-02-uncapped-premium-fanout.md`
+  - `2026-07-03-github-pat-plaintext-recurrence.md`
+  - `2026-07-03-credential-guard-interpreter-bypass.md`
+  - `2026-07-04-github-pat-read-grep-leak.md`
+  - `2026-07-04-graphify-console-flash-three-surfaces.md`
+- **`skills/`** — five custom skills (`dcb`, `descope-sweep`, `park`,
+  `proglog`, `handoff`) published as patterns, with a `README.md` explaining
+  what each does and when it fires.
+- **`decisions/ADR-001-public-claude-ops-repo.md`** — the scope contract for
+  this repo: what gets published, what never does, and why the private
+  originals stay canonical while this is a curated, manually-synced copy.
+
+## Start here
+
+1. **`security/posture.md`** — the model this repo assumes: layered
+   controls, not a single silver-bullet hook.
+2. **`incidents/2026-07-04-github-pat-read-grep-leak.md`** — the sharpest
+   illustration of the throughline above. A hook built to stop shell
+   commands from leaking a token got bypassed by Claude's own `Read` and
+   `Grep` tools reading the same file with no shell involved — and even
+   "grep instead of cat" wasn't safe, because content-mode grep still prints
+   the matched line, and the matched line for a `"KEY": "value"` config
+   entry *is* the secret.
+3. **`security/credential-guard.py`** — the fix, in the form it actually
+   runs in.
+
+## Scale, honestly
+
+This is one engineer's machine, not a team or a platform. There's no fleet,
+no shared incident channel, no on-call rotation — every "postmortem" here is
+a solo session catching its own mistake in the same turn it happened. It's
+published anyway because the failure modes (tool-shape gaps in a mechanical
+guard, uncapped multi-agent fan-out cost, a debugging session in production
+credentials by accident) don't depend on team size. They just need an agent
+with shell access and a person who trusts it a little too soon.
