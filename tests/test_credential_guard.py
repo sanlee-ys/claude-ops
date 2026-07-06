@@ -180,6 +180,68 @@ class TestBoundedOutOfScope(GuardTestCase):
         self.assertAllowed(*self.bash("cat ~/.claud*.json"))
 
 
+class TestRedTeamRegressions(GuardTestCase):
+    """Bypasses and false positives found by an adversarial pass on v2 and
+    fixed in the same change. Each is pinned so it can't silently reopen."""
+
+    def test_h1_template_comment_does_not_disarm(self):
+        # A trailing `# .env.example` must NOT launder a real secret read.
+        self.assertBlocked(*self.bash("cat /home/user/.claude.json  # see .env.example"))
+        self.assertBlocked(*self.bash("xxd ~/.ssh/id_rsa  # .env.template"))
+        self.assertBlocked(*self.bash("cat .env.example .env"))
+        self.assertBlocked("Read",
+                           {"file_path": "/home/user/.env.example/../.claude.json"})
+        # ...but a genuine template read is still allowed.
+        self.assertAllowed("Read", {"file_path": "/home/user/.env.example"})
+
+    def test_h2_odd_path_fields_and_arrays(self):
+        for field in ("target_file", "filename", "abs_path", "input_path"):
+            self.assertBlocked("mcp__fs__read",
+                               {field: "/home/user/.claude.json"}, msg=field)
+        self.assertBlocked("Read", {"paths": ["/home/user/.claude.json"]})
+        self.assertBlocked("mcp__x__read",
+                           {"opts": {"file_path": "/home/user/.env"}})
+
+    def test_h2_content_fields_not_falsely_blocked(self):
+        # The field-name heuristic must not block a non-path field that merely
+        # mentions a sensitive path (Write/Edit content).
+        self.assertAllowed("Write", {"file_path": "/home/user/project/notes.md",
+                                     "content": "remember to set ~/.claude.json"})
+        self.assertAllowed("Edit", {"file_path": "/home/user/project/a.py",
+                                    "old_string": "read .env",
+                                    "new_string": "read config"})
+
+    def test_m1_powershell_single_env_var_read(self):
+        for cmd in [
+            "Get-Item Env:ANTHROPIC_API_KEY",
+            "Get-Content Env:GITHUB_TOKEN",
+            "(Get-Item Env:GITHUB_TOKEN).Value",
+            "gi Env:AWS_SECRET_ACCESS_KEY",
+        ]:
+            self.assertBlocked(*self.ps(cmd), msg=cmd)
+        # a non-credential env var is fine to read
+        self.assertAllowed(*self.ps("Get-Item Env:PATH"))
+
+    def test_m2_herestring_credential_var(self):
+        self.assertBlocked(*self.bash("cat <<< $ANTHROPIC_API_KEY"))
+
+    def test_f1_checksums_allowed(self):
+        for cmd in ["sha256sum /home/user/.env", "cksum /home/user/.env",
+                    "md5sum ~/.ssh/id_rsa"]:
+            self.assertAllowed(*self.bash(cmd), msg=cmd)
+
+    def test_f2_public_cert_allowed_private_key_blocked(self):
+        self.assertAllowed(*self.bash("cat fullchain.pem"))
+        self.assertAllowed(*self.bash("cat cert.pem"))
+        self.assertBlocked(*self.bash("cat privkey.pem"))
+        self.assertBlocked(*self.bash("cat /home/user/.ssh/server.key"))
+
+    def test_f3_tar_archive_allowed_but_stdout_blocked(self):
+        self.assertAllowed(*self.bash("tar czf backup.tgz /home/user/.ssh/id_rsa"))
+        self.assertBlocked(*self.bash("tar -O -xf backup.tgz /home/user/.ssh/id_rsa"))
+        self.assertBlocked(*self.bash("tar cf - /home/user/.ssh/id_rsa"))
+
+
 class TestFalsePositives(GuardTestCase):
     """The discipline that killed v1's first over-broad draft: routine work
     that merely NAMES a sensitive path, or checks its existence, must pass."""

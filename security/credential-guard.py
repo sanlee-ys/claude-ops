@@ -123,10 +123,32 @@ SENSITIVE_FILE_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
-# Dotenv templates that are safe to read — checked-in examples, never secret.
+# Non-secret matches that the sensitive pattern would otherwise catch: dotenv
+# templates (checked-in examples) and public certificate/chain files (a `.pem`
+# that is a cert, not a private key). Applied PER MATCHED PATH — never over a
+# whole command segment, or a one-word `# .env.example` comment would disarm
+# the guard for every file (red-team finding H1).
 ENV_TEMPLATE = re.compile(
     r"\.env\.(example|sample|template|dist|defaults?)\b", re.IGNORECASE
 )
+PUBLIC_CERT = re.compile(
+    r"(fullchain|chain|ca|cert|public|pub)[\w.-]*\.(pem|crt|cer)\b", re.IGNORECASE
+)
+
+
+def _match_exempt(matched):
+    """A sensitive-pattern hit that's actually a public template/cert."""
+    return bool(ENV_TEMPLATE.search(matched) or PUBLIC_CERT.search(matched))
+
+
+def _has_sensitive_path(text):
+    """True if `text` names a credential store, evaluating the template/cert
+    exemption per matched path so an unrelated template mention elsewhere in
+    the string can't launder a real secret path (red-team H1)."""
+    if not isinstance(text, str):
+        return False
+    return any(not _match_exempt(m.group(0))
+               for m in SENSITIVE_FILE_PATTERN.finditer(text))
 
 
 # --- Environment dumps and targeted credential-var reads -------------------
@@ -165,7 +187,12 @@ CRED_VAR_READ = re.compile(
     # [Environment]::GetEnvironmentVariable("NAME"...)
     + r"|GetEnvironmentVariable\(\s*['\"]?" + _CRED_VAR
     # a bare `$env:NAME` that stands alone (PowerShell echoes it)
-    + r"|^\s*\$env:" + _CRED_VAR + r"\s*$",
+    + r"|^\s*\$env:" + _CRED_VAR + r"\s*$"
+    # PowerShell single-var reads: Get-Item / Get-Content / gi / gc Env:NAME
+    # (the dump forms need `*`; a single named read printed the value) — H2 M1.
+    + r"|(?:Get-Item|Get-Content|gi|gc)\s+Env:\\?" + _CRED_VAR
+    # herestring feeding a credential var to a command's stdin — red-team M2.
+    + r"|<<<\s*['\"]?\$(?:\{)?(?:env:)?" + _CRED_VAR,
     re.IGNORECASE,
 )
 
@@ -177,9 +204,11 @@ CRED_VAR_READ = re.compile(
 # navigation, string/echo, and version control. Everything else that names a
 # sensitive path is treated as a read and blocked (default-deny).
 SAFE_COMMANDS = {
-    # existence / metadata
+    # existence / metadata (emit a name, size, or hash — never the content)
     "ls", "dir", "ll", "la", "vdir", "stat", "file", "test", "[", "[[",
     "du", "df", "wc", "readlink", "realpath", "basename", "dirname", "tree",
+    "md5sum", "sha1sum", "sha256sum", "sha512sum", "shasum", "cksum", "b2sum",
+    "get-filehash",
     # navigation / no-op / string
     "cd", "pushd", "popd", ":", "true", "false", "echo", "printf", "print",
     # file management (no file content to stdout)
@@ -240,14 +269,21 @@ def _strip_heredocs(command):
     return "\n".join(out)
 
 
+# tar writing to an archive file emits no secret content to the caller (like
+# `cp`), so it's safe — UNLESS it extracts to stdout (`-O`/`--to-stdout`) or
+# writes the archive to stdout (`f -`), which does surface the bytes.
+_TAR_TO_STDOUT = re.compile(r"(?<![\w-])-O\b|--to-stdout\b|(?<!\S)-(?=\s|$)")
+
+
 def _reads_sensitive_path(seg):
     """True if the segment reads a sensitive target's content (default-deny)."""
-    m = SENSITIVE_FILE_PATTERN.search(seg)
-    if not m or ENV_TEMPLATE.search(seg):
+    if not _has_sensitive_path(seg):
         return False
     lead = _leading_command(seg)
     if lead in GREP_FAMILY:
         return not GREP_SAFE_FLAG.search(seg)          # content grep = read
+    if lead == "tar":
+        return bool(_TAR_TO_STDOUT.search(seg) or _SUBSTITUTION.search(seg))
     if lead in SAFE_COMMANDS:
         if lead == "find" and re.search(r"-exec(dir)?\b", seg):
             return True                                # find -exec <reader>
@@ -299,10 +335,30 @@ _MSG_MCP = (
     "genuinely need the stored value.\n"
 )
 
-# Every tool-input field that can carry a path to a content read. Checked on
-# ALL tools (not a fixed {Read, Grep} pair), so a reader tool that isn't hooked
-# yet is still covered — the structural fix for the 2026-07-04 tool-shape gap.
-PATH_FIELDS = ("file_path", "path", "notebook_path", "filepath", "file", "uri")
+# A tool-input field carries a path if its NAME looks path-like. Checked on ALL
+# tools (not a fixed {Read, Grep} pair), so a reader tool that isn't hooked yet
+# is covered — the structural fix for the 2026-07-04 tool-shape gap. Matching on
+# the field *name* (not every string value) means an odd field like
+# `target_file` / `filename` / `abs_path` / a `paths` array is still caught
+# (red-team H2), while a `content` / `old_string` field that merely mentions a
+# path is not falsely blocked.
+_PATH_FIELD_NAME = re.compile(r"path|file|dir|uri|url", re.IGNORECASE)
+
+
+def _field_targets_sensitive(obj, key_is_pathy=False):
+    """Recursively true if any path-named field (or element of one) targets a
+    credential store. `key_is_pathy` carries the enclosing key's path-ness down
+    into list elements so `{"paths": ["~/.claude.json"]}` is caught."""
+    if isinstance(obj, str):
+        return key_is_pathy and _has_sensitive_path(obj)
+    if isinstance(obj, list):
+        return any(_field_targets_sensitive(x, key_is_pathy) for x in obj)
+    if isinstance(obj, dict):
+        return any(
+            _field_targets_sensitive(v, bool(_PATH_FIELD_NAME.search(str(k))))
+            for k, v in obj.items()
+        )
+    return False
 
 
 def main():
@@ -331,8 +387,7 @@ def main():
         if tool_input.get("output_mode") == "content":
             for field in ("path", "glob"):
                 v = tool_input.get(field, "")
-                if isinstance(v, str) and v and SENSITIVE_FILE_PATTERN.search(v) \
-                        and not ENV_TEMPLATE.search(v):
+                if _has_sensitive_path(v):
                     block(_MSG_GREP)
         sys.exit(0)
 
@@ -361,13 +416,13 @@ def main():
         sys.exit(0)
 
     # Every other tool (Read, NotebookEdit, MCP file readers, ...): block if any
-    # path-bearing field targets a sensitive file. This is the default-deny that
-    # closes the tool-shape gap by construction.
-    for field in PATH_FIELDS:
-        v = tool_input.get(field, "")
-        if isinstance(v, str) and v and SENSITIVE_FILE_PATTERN.search(v) \
-                and not ENV_TEMPLATE.search(v):
-            block(_MSG_PATH)
+    # path-named field targets a sensitive file. This is the default-deny that
+    # closes the tool-shape gap by construction — reads OR writes to a
+    # credential store (overwriting ~/.ssh/id_rsa is as bad an outcome as
+    # printing it; the human-runs-credentials protocol covers legitimate cases,
+    # with Bash + MASK-OK as the escape hatch).
+    if _field_targets_sensitive(tool_input):
+        block(_MSG_PATH)
     sys.exit(0)
 
 
