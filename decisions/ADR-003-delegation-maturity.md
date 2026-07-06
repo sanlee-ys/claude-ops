@@ -1,0 +1,125 @@
+# ADR-003: Path to full delegation maturity ("getting to 10")
+
+**Status:** Accepted — 2026-07-06.
+**Scope:** This repo (the Claude operating layer). Repo-local ADR per the
+two-tier convention — cross-repo decisions live in the public `architecture`
+repo as SYS-NNN; a SYS entry pointing here would be a follow-up, not part of
+this ADR.
+
+## Context
+
+A 2026-07-06 session rated the current state of Claude-operating maturity at
+**9/10**, on evidence across this repo: the `incidents/` postmortems (the four
+credential-exposure events in one week and the mechanical guard that ended
+them, plus the private-repo annexes that carry the redacted specifics), the
+fan-out cost-control guard (incident
+[`2026-07-02-uncapped-premium-fanout.md`](../incidents/2026-07-02-uncapped-premium-fanout.md)),
+the parallel-session coordination protocol in
+[`operating-model.md`](../operating-model.md), and the
+[credential-guard](../security/credential-guard.py) postmortems.
+
+This ADR captures the plan to close the remaining point, plus a deliberately
+deferred backlog **not to start until it's closed**.
+
+## Definition of 10
+
+A new-shaped failure gets caught by a control that was built *proactively*, not
+discovered by a postmortem afterward — and a defined class of work can be
+delegated at high autonomy with a measured, acceptable rework rate.
+
+The 9→10 gap is discipline and verification, not tooling surface. Every phase
+below trades prose for a mechanical control or a measured number.
+
+## Phase 1 — Kill the secrets class structurally
+
+The credential-exposure series (three of the four events the *same* PAT leaking
+through a *different* tool or command shape each time) is the only remaining
+gap with **live risk attached**. Close it structurally rather than one leak
+shape at a time.
+
+**Status as of 2026-07-07:** primary desktop migrated (PAT off plaintext,
+platform keystore blob + wrapper, verified live). The laptop's migration script
+is written and dry-tested, not yet run. Guard rewrite and adversarial CI suite
+not started (blocked earlier on this repo's access in one session; unblocked
+now).
+
+1. **Secret out of every plaintext file, on every machine.** Desktop done,
+   laptop pending — the private config repo's handoff doc and migration branch
+   record the exact state and scripts.
+2. **Rewrite the credential guard from a command-shape denylist to a
+   path-based default-deny.** Block on the *target path* being read
+   (`~/.claude.json`, `.env*`, SSH keys, etc.) regardless of which tool or
+   command shape reaches for it. Must cover content-mode `Grep` specifically,
+   not just `Read`/`Bash` — a 2026-07-04 postmortem finding
+   ([`2026-07-04-github-pat-read-grep-leak.md`](../incidents/2026-07-04-github-pat-read-grep-leak.md)).
+3. **Adversarial test suite in CI:** one test per bypass shape from the four
+   2026-07-02..04 incidents, so a future bypass is caught by CI, not by a fifth
+   incident.
+
+**Exit criterion:** secret material in no plaintext file anywhere; guard test
+suite green in CI; 30 days of live use with zero credential prints.
+
+## Phase 2 — Rule-surface diet
+
+Every rule in a `CLAUDE.md` is context a session carries every turn *and* prose
+that must be kept in sync by hand. The link-verification block currently
+copy-pasted into eleven repos' `CLAUDE.md` files is the visible symptom.
+
+1. **Single-source shared blocks.** Extend the hook-sync script (or a sibling)
+   to manage `CLAUDE.md` sections the same way it manages hooks: canonical text
+   in the private config repo, marker comments in consumers, a `--check` drift
+   mode wired into CI.
+2. **Prune by the enforcement test.** For every rule, ask whether it's
+   mechanically enforced (hook / CI / pre-commit). If yes, shrink the prose to a
+   one-line pointer at the enforcer. If no and it matters, build the enforcer
+   first, *then* shrink the prose. Unenforced prose duplicating a control is
+   exactly how a provisioning script's stale embedded copy went undetected.
+3. **Measure it.** Token-count each `CLAUDE.md`, set a per-repo budget, and
+   track it over time like an eval metric instead of letting rule mass grow
+   silently.
+
+**Exit criterion:** shared blocks single-sourced with a CI drift check; total
+`CLAUDE.md` token mass down materially (target: 40%); zero rules duplicating a
+mechanical control.
+
+## Phase 3 — Calibrated delegation
+
+The actual last point. Autonomy level should be set by the strength of
+*automated verification*, not by trust or feel — the public portfolio repo's
+`mobile-qa.cjs` gate is the existing proof of the pattern (a verifier earns the
+autonomy).
+
+1. **Write a delegation policy:** task classes × autonomy levels
+   (plan-and-approve → autonomous-with-verify → autonomous multi-session with
+   an integrator), each level gated on which verifier covers it.
+2. **Run it as an experiment** across the next ~10 substantive tasks: assign an
+   autonomy level up front, log the outcome (accepted as-is / minor rework /
+   major rework).
+3. **Recalibrate on the data:** task classes with a clean record move up a
+   level; classes generating rework get a verifier built before being trusted
+   with more autonomy again.
+
+**Exit criterion:** written policy grounded in ≥10 logged outcomes; at least one
+task class running at full autonomy with <20% rework; every autonomy promotion
+justified by a verifier, not a feeling.
+
+## Deferred backlog — do not start until Phase 1–3 close
+
+Explicitly scope-gated in the 2026-07-06 session as premature until the above
+lands. Listed here so the idea isn't lost — **not** as a queued task:
+
+- New Agent SDK projects / custom subagent types beyond what already exists.
+- New Workflow-tool patterns beyond the ones already documented (adversarial
+  verify, judge panel, loop-until-dry, multi-modal sweep, completeness critic).
+- Additional Claude Code skills beyond the current set (handoff, fan-out cost
+  estimation, hook-sync, etc.).
+
+**Rationale for the gate:** none of these move the maturity number right now —
+the gap is in discipline and verification, not in tooling surface. Revisit this
+list only after Phase 1–3's exit criteria are all met.
+
+## Sequencing
+
+**Phase 1 first.** It's the only phase with live risk attached (an active
+credential-leak class) and is worth roughly half the remaining point on its
+own. Phases 2 and 3 follow once the secrets class is structurally dead.
