@@ -1,0 +1,70 @@
+name: shared-block-drift
+
+# Automated drift gate for the single-sourced CLAUDE.md blocks (ADR-003 Phase 2).
+# Verifies that every PUBLIC sibling repo's shared marker blocks still match the
+# canonical text embedded in scripts/sync-shared-blocks.py.
+#
+# Scope, and why it's drawn here:
+#   - PUBLIC consumers only. A public workflow can't read a private repo without
+#     a token, and this repo's posture forbids tokens in public CI; naming a
+#     private repo here would also disclose it. Private consumers are covered by
+#     running `scripts/sync-shared-blocks.py --check` locally, the same way
+#     sync-claude-hooks is — see security/posture.md.
+#   - Consumers are DISCOVERED, not enumerated: we list the owner's public repos
+#     via the API and clone the ones that carry a CLAUDE.md. This workflow names
+#     no repositories, and private repos never appear in the public listing, so
+#     they're excluded by construction.
+#   - No secret beyond the default GITHUB_TOKEN (public reads only); cloning a
+#     public repo needs no auth at all.
+
+on:
+  schedule:
+    - cron: "17 8 * * 1" # weekly, Monday 08:17 UTC
+  workflow_dispatch:
+  push:
+    branches: ["main"]
+    paths:
+      - "conventions/**"
+      - "scripts/sync-shared-blocks.py"
+
+jobs:
+  drift:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out claude-ops
+        uses: actions/checkout@v4
+        with:
+          path: claude-ops
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Clone public sibling repos that have a CLAUDE.md
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          set -euo pipefail
+          # Public, non-fork, non-archived repos owned by OWNER. Private repos are
+          # absent from this list by definition, so they're never cloned or named.
+          gh api --paginate "users/$OWNER/repos?type=public&per_page=100" \
+            --jq '.[] | select(.fork==false and .archived==false) | .name' \
+          | while read -r repo; do
+              [ "$repo" = "claude-ops" ] && continue
+              # Only bother with repos that actually carry a CLAUDE.md.
+              if gh api "repos/$OWNER/$repo/contents/CLAUDE.md" --jq '.path' >/dev/null 2>&1; then
+                if git clone --depth 1 "https://github.com/$OWNER/$repo.git" "$repo" >/dev/null 2>&1; then
+                  echo "cloned $repo"
+                else
+                  echo "WARN: clone failed for $repo (skipped)"
+                fi
+              fi
+            done
+
+      - name: Check shared-block drift against canonical
+        run: |
+          # The script globs <root>/*/CLAUDE.md, finds shared:* marker blocks, and
+          # compares each to its canonical text. claude-ops/CLAUDE.md carries no
+          # marker, so it's skipped. Exits non-zero on any drift → red build.
+          python claude-ops/scripts/sync-shared-blocks.py --check --root "$PWD"
