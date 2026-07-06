@@ -242,6 +242,53 @@ class TestRedTeamRegressions(GuardTestCase):
         self.assertBlocked(*self.bash("tar cf - /home/user/.ssh/id_rsa"))
 
 
+class TestRedTeamRound2(GuardTestCase):
+    """Bypasses/false-positives found by a second adversarial pass, targeting
+    the fixes from round 1. Two were HIGH content bypasses in the new code."""
+
+    def test_h1_cert_exemption_does_not_launder_private_keys(self):
+        for path in ["/home/user/.ssh/ca-key.pem", "/home/user/certs/cert-key.pem",
+                     "/home/user/certkey.pem"]:
+            self.assertBlocked("Read", {"file_path": path}, msg=path)
+        self.assertBlocked(*self.bash("xxd /etc/step/ca-key.pem"))
+        self.assertBlocked(*self.bash(
+            "python3 -c \"print(open('cert-key.pem').read())\""))
+        # genuine public certs stay allowed
+        self.assertAllowed(*self.bash("cat fullchain.pem"))
+        self.assertAllowed(*self.bash("cat cert.pem"))
+
+    def test_h2_tar_clustered_stdout_flags(self):
+        for cmd in ["tar xfO b.tar /home/user/.ssh/id_rsa",
+                    "tar xOf b.tar /home/user/.ssh/id_rsa",
+                    "tar xzfO b.tgz /home/user/.ssh/id_rsa"]:
+            self.assertBlocked(*self.bash(cmd), msg=cmd)
+        # archiving to a file (no stdout) stays allowed
+        self.assertAllowed(*self.bash("tar czf backup.tgz /home/user/.ssh/id_rsa"))
+
+    def test_m1_powershell_bare_quoted_interpolation(self):
+        self.assertBlocked(*self.ps('"$env:ANTHROPIC_API_KEY"'))
+        # the guard's OWN recommended existence check must stay allowed
+        self.assertAllowed(*self.ps("[bool]$env:ANTHROPIC_API_KEY"))
+        self.assertAllowed(*self.ps("$key = $env:ANTHROPIC_API_KEY"))
+
+    def test_m2_psvariable_getvalue(self):
+        self.assertBlocked(*self.ps(
+            '$ExecutionContext.SessionState.PSVariable.GetValue("env:ANTHROPIC_API_KEY")'))
+
+    def test_l1_aws_config_subdir_not_blocked(self):
+        self.assertAllowed("mcp__x__run",
+                           {"working_dir": "/home/user/.aws/config-templates"})
+        self.assertAllowed("Read", {"file_path": "/home/user/.aws/config.d/dev"})
+        # the real files stay blocked
+        self.assertBlocked("Read", {"file_path": "/home/user/.aws/config"})
+        self.assertBlocked("Read", {"file_path": "/home/user/.aws/credentials"})
+
+    def test_l2_pathy_named_prose_field_not_blocked(self):
+        self.assertAllowed("mcp__x__x", {"dir_label": "backup of .env"})
+        # a real path in a pathy field still blocks
+        self.assertBlocked("mcp__x__read", {"source": "/home/user/.claude.json"})
+
+
 class TestFalsePositives(GuardTestCase):
     """The discipline that killed v1's first over-broad draft: routine work
     that merely NAMES a sensitive path, or checks its existence, must pass."""

@@ -100,7 +100,7 @@ SENSITIVE_FILE_PATTERN = re.compile(
     r"|id_(rsa|ed25519|ecdsa|dsa)\w*"
     r"|[\w.-]+\.(pem|key|ppk|p12|pfx|jks)"
     # Cloud CLIs.
-    r"|\.aws[/\\](credentials|config)"
+    r"|\.aws[/\\](credentials|config)(?![\w.-])"
     r"|\.azure[/\\][\w.-]+"
     r"|\.config[/\\]gcloud[/\\][\w.-]+"
     # Package / registry / infra.
@@ -129,16 +129,31 @@ SENSITIVE_FILE_PATTERN = re.compile(
 # whole command segment, or a one-word `# .env.example` comment would disarm
 # the guard for every file (red-team finding H1).
 ENV_TEMPLATE = re.compile(
-    r"\.env\.(example|sample|template|dist|defaults?)\b", re.IGNORECASE
+    r"^\.env\.(example|sample|template|dist|defaults?)$", re.IGNORECASE
 )
+# Public certificate/chain basenames — anchored to the WHOLE basename, and
+# refused for any name containing key/priv. A private key is routinely named
+# `ca-key.pem` / `cert-key.pem` (step-ca, cfssl) and begins with a cert token,
+# so a substring match would exempt the most sensitive key on the box
+# (red-team round 2, H1). `.key`/`.p12`/`.pfx`/`.jks` are never exempt.
 PUBLIC_CERT = re.compile(
-    r"(fullchain|chain|ca|cert|public|pub)[\w.-]*\.(pem|crt|cer)\b", re.IGNORECASE
+    r"^(fullchain|chain|ca|cacert|ca-bundle|cert|certificate|public|pub)"
+    r"\.(pem|crt|cer)$", re.IGNORECASE
 )
+_KEYISH = re.compile(r"key|priv", re.IGNORECASE)
+
+
+def _basename(matched):
+    return re.split(r"[/\\]", matched.strip().strip("'\"(),=:@ "))[-1]
 
 
 def _match_exempt(matched):
-    """A sensitive-pattern hit that's actually a public template/cert."""
-    return bool(ENV_TEMPLATE.search(matched) or PUBLIC_CERT.search(matched))
+    """A sensitive-pattern hit that's actually a public template/cert — judged
+    on the basename, and never when the name looks like a private key."""
+    name = _basename(matched)
+    if _KEYISH.search(name):
+        return False
+    return bool(ENV_TEMPLATE.match(name) or PUBLIC_CERT.match(name))
 
 
 def _has_sensitive_path(text):
@@ -184,14 +199,19 @@ CRED_VAR_READ = re.compile(
     # echo/print $NAME, ${NAME}, $env:NAME
     + r"|(?:echo|printf|print|write-host|write-output)\b[^\n]*"
     + r"\$(?:\{)?(?:env:)?" + _CRED_VAR
-    # [Environment]::GetEnvironmentVariable("NAME"...)
+    # [Environment]::GetEnvironmentVariable("NAME"...) and the PSVariable
+    # GetValue("env:NAME") form (red-team round 2, M2).
     + r"|GetEnvironmentVariable\(\s*['\"]?" + _CRED_VAR
-    # a bare `$env:NAME` that stands alone (PowerShell echoes it)
+    + r"|GetValue\(\s*['\"]?env:" + _CRED_VAR
+    # a bare `$env:NAME` that stands alone, or a double-quoted string that leads
+    # with it (both emit the value in PowerShell) — round 2, M1. NOT a cast/test
+    # like `[bool]$env:NAME`, which is the recommended existence check.
     + r"|^\s*\$env:" + _CRED_VAR + r"\s*$"
+    + r"|^\s*\"[^\"\n]*\$(?:\{)?env:" + _CRED_VAR
     # PowerShell single-var reads: Get-Item / Get-Content / gi / gc Env:NAME
-    # (the dump forms need `*`; a single named read printed the value) — H2 M1.
+    # (the dump forms need `*`; a single named read printed the value) — M1.
     + r"|(?:Get-Item|Get-Content|gi|gc)\s+Env:\\?" + _CRED_VAR
-    # herestring feeding a credential var to a command's stdin — red-team M2.
+    # herestring feeding a credential var to a command's stdin — round 1, M2.
     + r"|<<<\s*['\"]?\$(?:\{)?(?:env:)?" + _CRED_VAR,
     re.IGNORECASE,
 )
@@ -270,9 +290,15 @@ def _strip_heredocs(command):
 
 
 # tar writing to an archive file emits no secret content to the caller (like
-# `cp`), so it's safe — UNLESS it extracts to stdout (`-O`/`--to-stdout`) or
-# writes the archive to stdout (`f -`), which does surface the bytes.
-_TAR_TO_STDOUT = re.compile(r"(?<![\w-])-O\b|--to-stdout\b|(?<!\S)-(?=\s|$)")
+# `cp`), so it's safe — UNLESS it extracts to stdout (`-O`/`--to-stdout`, incl.
+# the clustered old-style `xfO`/`xOf`/`xzfO` form, red-team round 2 H2) or
+# writes the archive to stdout (a bare `-`), which does surface the bytes.
+_TAR_TO_STDOUT = re.compile(
+    r"--to-stdout\b"
+    r"|(?<![\w-])-O\b"
+    r"|(?<!\S)-(?=\s|$)"
+    r"|\btar\s+-?[a-zA-Z]*O[a-zA-Z]*\b"
+)
 
 
 def _reads_sensitive_path(seg):
@@ -342,15 +368,28 @@ _MSG_MCP = (
 # `target_file` / `filename` / `abs_path` / a `paths` array is still caught
 # (red-team H2), while a `content` / `old_string` field that merely mentions a
 # path is not falsely blocked.
-_PATH_FIELD_NAME = re.compile(r"path|file|dir|uri|url", re.IGNORECASE)
+_PATH_FIELD_NAME = re.compile(
+    r"path|file|dir|uri|url|src|source|dest|location|target", re.IGNORECASE
+)
+
+
+def _looks_like_path(v):
+    """A value is a filesystem path, not prose, if it has a separator, starts
+    like a path, or has no spaces. Gates the field scan so a pathy-NAMED field
+    holding a human label ("backup of .env") isn't blocked (round 2, L2)."""
+    v = v.strip()
+    return bool(v) and ("/" in v or "\\" in v
+                        or v.startswith(("~", ".")) or " " not in v)
 
 
 def _field_targets_sensitive(obj, key_is_pathy=False):
     """Recursively true if any path-named field (or element of one) targets a
     credential store. `key_is_pathy` carries the enclosing key's path-ness down
-    into list elements so `{"paths": ["~/.claude.json"]}` is caught."""
+    into list elements so `{"paths": ["~/.claude.json"]}` is caught. The field
+    name is a bounded heuristic — a reader tool using an unforeseen field name
+    is a known residual gap (posture threat model), not a claimed-closed case."""
     if isinstance(obj, str):
-        return key_is_pathy and _has_sensitive_path(obj)
+        return key_is_pathy and _looks_like_path(obj) and _has_sensitive_path(obj)
     if isinstance(obj, list):
         return any(_field_targets_sensitive(x, key_is_pathy) for x in obj)
     if isinstance(obj, dict):
