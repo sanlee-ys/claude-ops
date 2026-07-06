@@ -10,6 +10,8 @@ Claude operating layer (see
 - **Shared cross-repo blocks** — single-sourced here, mirrored into sibling
   repos' `CLAUDE.md` as compressed pointers: [`conventions/`](conventions/).
   Propagate or drift-check with `python scripts/sync-shared-blocks.py [--check]`.
+- **Delegation policy** — task classes × autonomy levels, each gated on a
+  verifier: [`delegation-policy.md`](delegation-policy.md).
 - **Decisions:** [`decisions/`](decisions/). **Incidents:** [`incidents/`](incidents/).
 
 This repo is public and guarded by a pre-commit redline check
