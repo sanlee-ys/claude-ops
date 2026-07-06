@@ -1,6 +1,9 @@
 # ADR-001: A public home for the Claude operating layer
 
-**Status:** Accepted — 2026-07-05
+**Status:** Accepted — 2026-07-05. Superseded in part the same day: the
+"Canonicality and sync" section below was reversed by
+[ADR-002](ADR-002-public-first-canonicality.md) (this repo is now the system
+of record, with a mechanical redline guard). The boundaries are unchanged.
 **Scope:** This repo. Repo-local ADR per the two-tier convention (cross-repo
 decisions live in the public `architecture` repo as SYS-NNN; a SYS entry
 pointing here is a follow-up, not part of this ADR).
@@ -44,7 +47,7 @@ Split the publishable layer into this public repo. Four pillars:
 - The raw permission allowlist file. The posture doc describes the design
   and its reasoning; the live `settings.json` is machine state, not content.
 
-## Canonicality and sync
+## Canonicality and sync (superseded by ADR-002)
 
 The private working copies remain the system of record — they carry
 un-redacted detail (real repo names, commit hashes, timelines). This repo is

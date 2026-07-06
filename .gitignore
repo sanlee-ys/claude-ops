@@ -1,0 +1,3 @@
+# machine-local redline terms for scripts/redline-guard.py — never published
+.redlines.local
+__pycache__/

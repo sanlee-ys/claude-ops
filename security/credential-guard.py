@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-# hook-version: 1 (canonical: the live deploy is provisioned from a private
-# config repo; this file is the published snapshot)
+# hook-version: 1 (canonical: THIS file, per decisions/ADR-002 — the live
+# deploy at ~/.claude/hooks/ and any provisioning copies sync FROM here)
 """Credential exposure guard (global PreToolUse hook).
 
 Written 2026-07-03 after the SAME failure mode hit twice in one week:

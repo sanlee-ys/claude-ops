@@ -66,9 +66,18 @@ nothing and might get the next gap found by a reader instead of a leak.
 - **`skills/`** — five custom skills (`dcb`, `descope-sweep`, `park`,
   `proglog`, `handoff`) published as patterns, with a `README.md` explaining
   what each does and when it fires.
-- **`decisions/ADR-001-public-claude-ops-repo.md`** — the scope contract for
-  this repo: what gets published, what never does, and why the private
-  originals stay canonical while this is a curated, manually-synced copy.
+- **`decisions/`** — the repo's own contract, honestly versioned:
+  - `ADR-001-public-claude-ops-repo.md` — the scope contract: what gets
+    published here and what never does.
+  - `ADR-002-public-first-canonicality.md` — the same-day reversal of
+    ADR-001's sync model: this repo is the system of record, written
+    public-first, because "redact carefully" is a behavioral rule and this
+    repo's whole thesis is that behavioral rules get mechanical backstops.
+- **`scripts/redline-guard.py`** — that backstop: a pre-commit hook that
+  scans staged content for the publication-boundary violations (credential
+  shapes, private repo names, private memory links, local paths). Its banned
+  terms ship as SHA-256 hashes so the guard can't itself violate the
+  redlines it enforces.
 
 ## Start here
 

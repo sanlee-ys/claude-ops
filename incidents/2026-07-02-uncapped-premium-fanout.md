@@ -1,6 +1,6 @@
 # Postmortem: Uncapped premium-model fan-out burned a 5-hour window
 
-**Date:** 2026-07-02 | **Duration:** ~45 min | **Severity:** SEV1 (full usage window consumed, no warning)
+**Date:** 2026-07-02 | **Duration:** ~45 min | **Severity:** Cost (one full 5-hour usage window burned with no warning; nothing exposed, nothing broken — expensive and avoidable, not an outage)
 **Status:** Resolved (guard written; deployment gap found + closed on Windows)
 
 The full cost model, cost tables, and pre-flight protocol live in a private

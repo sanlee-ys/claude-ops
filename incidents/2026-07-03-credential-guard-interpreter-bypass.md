@@ -1,6 +1,6 @@
 # Postmortem: credential-guard.py had an interpreter-based bypass — found by audit, not by a leak
 
-**Date:** 2026-07-03 | **Duration:** ~3 hours across discovery, an overcorrection, and the real fix | **Severity:** Medium (real gap in a security control; found proactively during an audit, not exploited — no credential was actually printed unmasked)
+**Date:** 2026-07-03 | **Duration:** ~3 hours across discovery, an overcorrection, and the real fix | **Severity:** Near-miss (real gap in a security control, found proactively by audit and never exploited; nothing was exposed)
 **Status:** Resolved
 
 ## Summary
