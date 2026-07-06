@@ -120,6 +120,12 @@ autonomy).
 task class running at full autonomy with <20% rework; every autonomy promotion
 justified by a verifier, not a feeling.
 
+**Status (2026-07-06):** v0 policy written —
+[`delegation-policy.md`](../delegation-policy.md), the 3-rung ladder (plan →
+autonomous+verify → orchestrated fan-out) with a task-class-to-verifier table.
+Its experiment log is seeded with 7 outcomes from this session's Phase 2 work;
+3 more before the first recalibration.
+
 ## Deferred backlog — do not start until Phase 1–3 close
 
 Explicitly scope-gated in the 2026-07-06 session as premature until the above
