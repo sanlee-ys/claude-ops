@@ -374,6 +374,28 @@ class TestRedTeamRound4(GuardTestCase):
         self.assertBlocked(*self.bash("echo ~/.env | xargs cat"))
 
 
+class TestRedTeamRound5(GuardTestCase):
+    """Fifth pass — two HIGH bypasses in the round-4 parser/git-model code."""
+
+    def test_1_escaped_quote_does_not_hide_reader(self):
+        # An escaped quote inside a string must not swallow a following command.
+        self.assertBlocked(*self.bash('echo "\\"" ; cat /home/user/.env'))
+        self.assertBlocked(*self.bash('true "\\"" && cat ~/.claude.json'))
+        # ...and the same fix keeps a benign escaped-quote echo allowed.
+        self.assertAllowed(*self.bash('echo "a \\" ; cat /home/user/.env"'))
+
+    def test_2_git_dash_F_reads_file_as_message(self):
+        for cmd in [
+            "git commit -F /home/user/.env",
+            "git commit --file=/home/user/.env",
+            "git tag -a v1 -F /home/user/.env",
+            "git notes add -F /home/user/.ssh/id_rsa",
+        ]:
+            self.assertBlocked(*self.bash(cmd), msg=cmd)
+        # -F with a non-secret message file is fine
+        self.assertAllowed(*self.bash("git commit -F COMMIT_MSG.txt"))
+
+
 class TestFalsePositives(GuardTestCase):
     """The discipline that killed v1's first over-broad draft: routine work
     that merely NAMES a sensitive path, or checks its existence, must pass."""

@@ -273,6 +273,9 @@ _GIT_READ_SUB = {
 }
 _GIT_DANGER_FLAG = re.compile(
     r"(?<!\w)-c\s|--to-|core\.pager|(?<!\w)-p\b|--patch\b|(?<!\w)-[GS]\b"
+    # -F/--file reads the named file as the message (unlike -m prose), so a
+    # sensitive -F arg is a real content read (red-team round 5, #2).
+    r"|(?<!\w)-F\b|--file(=|\b)"
 )
 # Message-bearing git subcommands: their arg is prose, so the env-dump /
 # credential-var / mcp-get checks (which would false-positive on a commit
@@ -311,7 +314,15 @@ def _split_segments(command):
     segs, buf, quote, i, n = [], [], None, 0, len(command)
     while i < n:
         c = command[i]
-        if quote:
+        # A backslash escapes the next char outside single quotes, so `\"`
+        # inside a "..." string is a literal quote, not a close — tracking it as
+        # a close swallowed the following `; cat .env` into a phantom quoted span
+        # (red-team round 5, #1). Consume the escaped pair verbatim.
+        if c == "\\" and quote != "'" and i + 1 < n:
+            buf.append(c)
+            buf.append(command[i + 1])
+            i += 2
+        elif quote:
             buf.append(c)
             if c == quote:
                 quote = None
