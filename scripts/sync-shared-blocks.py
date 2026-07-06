@@ -38,15 +38,14 @@ CANONICAL_URL = (
 # is what every consumer carries verbatim — edit here and re-run to propagate.
 BLOCKS = {
     "links-verify": (
-        f"<!-- shared:links-verify v1 — canonical: {CANONICAL_URL} -->\n"
+        "<!-- shared:links-verify v1 -->\n"
         "## Links — verify before sending (hard rule)\n"
         "\n"
         "Links given in chat must resolve: **full "
-        "`https://github.com/<owner>/<repo>/blob/<ref>/<path>` URLs only**, "
-        "**verify the path exists on the ref before sending** (unverified → say "
-        "so), and **branch links are perishable** (prefer `main` once merged). "
-        "Full rule + rationale: "
-        f"[claude-ops `conventions/links-verify.md`]({CANONICAL_URL}).\n"
+        "`github.com/<owner>/<repo>/blob/<ref>/<path>` URLs only**, **verify the "
+        "path exists on the ref before sending** (unverified → say so), and "
+        "**branch links are perishable** (prefer `main` once merged). Full rule "
+        f"+ rationale: [claude-ops `conventions/links-verify.md`]({CANONICAL_URL}).\n"
         "<!-- /shared:links-verify -->"
     ),
 }
