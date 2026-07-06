@@ -138,7 +138,7 @@ ENV_TEMPLATE = re.compile(
 # (red-team round 2, H1). `.key`/`.p12`/`.pfx`/`.jks` are never exempt.
 PUBLIC_CERT = re.compile(
     r"^(fullchain|chain|ca|cacert|ca-bundle|cert|certificate|public|pub)"
-    r"\.(pem|crt|cer)$", re.IGNORECASE
+    r"\d*\.(pem|crt|cer)$", re.IGNORECASE  # \d*: certbot's cert1.pem/fullchain2.pem
 )
 _KEYISH = re.compile(r"key|priv", re.IGNORECASE)
 
@@ -295,6 +295,7 @@ def _strip_heredocs(command):
 # writes the archive to stdout (a bare `-`), which does surface the bytes.
 _TAR_TO_STDOUT = re.compile(
     r"--to-stdout\b"
+    r"|--to-command\b"                        # runs a reader per member (round 3)
     r"|(?<![\w-])-O\b"
     r"|(?<!\S)-(?=\s|$)"
     r"|\btar\s+-?[a-zA-Z]*O[a-zA-Z]*\b"
@@ -394,7 +395,8 @@ def _field_targets_sensitive(obj, key_is_pathy=False):
         return any(_field_targets_sensitive(x, key_is_pathy) for x in obj)
     if isinstance(obj, dict):
         return any(
-            _field_targets_sensitive(v, bool(_PATH_FIELD_NAME.search(str(k))))
+            _field_targets_sensitive(
+                v, key_is_pathy or bool(_PATH_FIELD_NAME.search(str(k))))
             for k, v in obj.items()
         )
     return False
@@ -435,16 +437,29 @@ def main():
         if not command or "MASK-OK" in command:
             sys.exit(0)
         command = _strip_heredocs(command)
-        for seg in re.split(r"\|\||&&|[;\n]|\|", command):
+        # A sensitive path piped into xargs becomes an argument to the
+        # downstream reader, so `echo ~/.env | xargs cat` reads it even though
+        # neither segment alone names a read of the path (red-team round 3, #2).
+        if re.search(r"\|\s*xargs\b", command) and _has_sensitive_path(command):
+            block(_MSG_PATH)
+        # Split on every shell separator, INCLUDING a single `&` — backgrounding
+        # (`true & cat ~/.env`) otherwise kept the reader in one segment behind a
+        # safe leading command (round 3, #1). `&&` is matched before `&`.
+        for seg in re.split(r"\|\||&&|&|[;\n]|\|", command):
             seg = seg.strip()
             if not seg:
                 continue
-            if ENV_DUMP_PATTERN.search(seg):
-                block(_MSG_ENV)
-            if CRED_VAR_READ.search(seg):
-                block(_MSG_VAR)
-            if MCP_GET_PATTERN.search(seg):
-                block(_MSG_MCP)
+            # git segments are VCS/prose — they never dump env, print a var, or
+            # run `mcp get`, and a commit message discussing those forms is a
+            # false positive (round 3, #4). The sensitive-path read check still
+            # runs; it correctly blocks `git commit -m "$(cat .env)"`.
+            if _leading_command(seg) != "git":
+                if ENV_DUMP_PATTERN.search(seg):
+                    block(_MSG_ENV)
+                if CRED_VAR_READ.search(seg):
+                    block(_MSG_VAR)
+                if MCP_GET_PATTERN.search(seg):
+                    block(_MSG_MCP)
             if _reads_sensitive_path(seg):
                 block(_MSG_PATH)
         sys.exit(0)

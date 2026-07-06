@@ -289,6 +289,46 @@ class TestRedTeamRound2(GuardTestCase):
         self.assertBlocked("mcp__x__read", {"source": "/home/user/.claude.json"})
 
 
+class TestRedTeamRound3(GuardTestCase):
+    """Third adversarial pass — a HIGH segmentation bypass plus edges."""
+
+    def test_1_single_ampersand_backgrounding(self):
+        self.assertBlocked(*self.bash("true & cat /home/user/.env"))
+        self.assertBlocked(*self.bash("ls & cat ~/.ssh/id_rsa"))
+        self.assertBlocked(*self.bash("echo hi & cat ~/.claude.json"))
+        # benign uses of & / && / redirection must stay allowed
+        self.assertAllowed(*self.bash("echo done && ls"))
+        self.assertAllowed(*self.bash("cat README.md 2>&1"))
+
+    def test_2_xargs_pipeline_read(self):
+        self.assertBlocked(*self.bash("echo ~/.env | xargs cat"))
+        self.assertBlocked(*self.bash("echo /home/user/.env | xargs -I{} cat {}"))
+        # a template piped to xargs is fine
+        self.assertAllowed(*self.bash("echo .env.example | xargs cat"))
+
+    def test_3_tar_to_command(self):
+        self.assertBlocked(*self.bash(
+            "tar --to-command=cat -xf b.tar /home/user/.ssh/id_rsa"))
+
+    def test_4_git_message_discussing_env_code_allowed(self):
+        self.assertAllowed(*self.bash(
+            "git commit -m \"use GetValue('env:MY_API_KEY') helper\""))
+        self.assertAllowed(*self.bash(
+            'git commit -m "wrap GetEnvironmentVariable(MY_API_KEY)"'))
+        # but a real env-var print is still blocked (not a git segment)...
+        self.assertBlocked(*self.bash("echo $ANTHROPIC_API_KEY"))
+        # ...and $() in a git message still blocks (the path check runs on git).
+        self.assertBlocked(*self.bash('git commit -m "$(cat /home/user/.env)"'))
+
+    def test_5_certbot_numbered_certs_allowed(self):
+        self.assertAllowed(*self.bash("cat fullchain1.pem"))
+        self.assertAllowed(*self.bash("cat cert1.pem"))
+        self.assertBlocked(*self.bash("cat privkey1.pem"))
+
+    def test_6_nested_dict_path_field(self):
+        self.assertBlocked("Read", {"source": {"inner": "/home/user/.claude.json"}})
+
+
 class TestFalsePositives(GuardTestCase):
     """The discipline that killed v1's first over-broad draft: routine work
     that merely NAMES a sensitive path, or checks its existence, must pass."""
