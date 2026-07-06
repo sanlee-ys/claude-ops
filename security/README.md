@@ -1,98 +1,167 @@
 # credential-guard
 
-A `PreToolUse` hook for Claude Code that blocks common ways a credential
-ends up printed in the clear to a session transcript. It's a mechanical
-backstop, not a policy document: the behavioral rule ("never print a
-credential-shaped value unmasked") already failed twice before this existed.
-See [`../posture.md`](../posture.md) for the reasoning behind treating this
-as a hook rather than a habit, and [`../incidents/`](../incidents/) for the
-specific leaks that shaped each revision.
+A `PreToolUse` hook for Claude Code that blocks common ways a credential ends
+up printed in the clear to a session transcript. It's a mechanical backstop,
+not a policy document: the behavioral rule ("never print a credential-shaped
+value unmasked") already failed twice before this existed. See
+[`../posture.md`](../posture.md) for the reasoning behind treating this as a
+hook rather than a habit, [`../incidents/`](../incidents/) for the specific
+leaks that shaped it, and [`../decisions/ADR-003-delegation-maturity.md`](../decisions/ADR-003-delegation-maturity.md)
+for the v1→v2 rewrite decision.
+
+## v2: path-based default-deny
+
+`hook-version: 2`. v1 was a **command-shape denylist** — it enumerated the read
+verbs it knew about (`cat`, `Get-Content`, `open()`, a short list) and blocked
+those. Every one of the four 2026-07 credential incidents was a shape v1's
+author hadn't enumerated yet, so the guard trailed each leak by exactly one
+incident. An enumerated denylist cannot win that race; it only ever lists the
+last leak's shape.
+
+v2 inverts the default. Instead of "is this one of the readers I listed?", the
+question is "**does a sensitive target's content reach the caller, unless this
+is a recognised _safe_ operation?**" A pager or formatter nobody thought to
+list (`head`, `xxd`, `base64`, `jq`, `awk`), an interpreter one-liner, or a
+content-returning tool that isn't hooked yet is denied **by default**; the
+small set of things that legitimately name a credential path without reading it
+(a `git commit` message, `ls`, `stat`, `rm`, `grep -l`, heredoc prose) is
+allowed.
 
 ## What it hooks
 
-`PreToolUse`, matched against four tool shapes:
+- **Bash / PowerShell** — the `command` string, split into segments and checked
+  for environment dumps, credential-shaped variable prints, `claude mcp get`,
+  and sensitive-path reads (default-deny by the segment's leading command).
+- **Grep** — blocked only when `output_mode` is `content` and the `path` (or a
+  `glob`) targets a credential file. `files_with_matches` and `count` never
+  echo the matched line, so they stay allowed — they're the recommended
+  existence check.
+- **Glob** — allowed. It returns paths, not content, so it can confirm a file
+  exists (the safe fallback the guard itself recommends) but can't print a
+  secret's value.
+- **Every other tool** — blocked if *any* path-bearing field (`file_path`,
+  `path`, `notebook_path`, `uri`, …) targets a credential file. This is the key
+  v2 change: coverage is keyed on the field, not a hard-coded `{Read, Grep}`
+  pair, so `Read`, notebook reads, and an MCP file-reader tool that doesn't
+  exist yet are all covered by construction. It's the structural fix for the
+  2026-07-04 tool-shape gap (`incidents/2026-07-04-github-pat-read-grep-leak.md`),
+  which was "the hook only named Bash/PowerShell" one tool-generation earlier.
 
-- **Bash** and **PowerShell** — command strings, split into segments and
-  checked for env dumps, sensitive-file reads, and `claude mcp get`.
-- **Read** — blocked outright if `file_path` matches a known credential-store
-  pattern.
-- **Grep** — blocked only when `output_mode` is `content` and `path` matches
-  the same pattern. `files_with_matches` and `count` modes never echo the
-  matched line, so they stay allowed.
-
-Read and Grep coverage were added later than Bash/PowerShell — the hook
-originally only checked `tool_name in ("Bash", "PowerShell")`, which meant
-Claude's own file-reading tools could read a secret straight past it. See
-`incidents/2026-07-04-github-pat-read-grep-leak.md`.
+Because coverage is now field-based, wire the hook to match **as many tools as
+your `settings.json` allows** (ideally all of them), not just the four v1
+named — a tool the matcher doesn't route to is a tool the guard never sees.
 
 ## What it blocks
 
-1. **Bulk environment dumps** — `env`, `printenv`, `Get-ChildItem Env:`,
-   `dir env:`, `ls env:`, `Get-Item Env:*`. Any credential-shaped variable
-   currently set gets printed in the clear. Check a specific variable
-   instead (`[bool]$env:VARNAME`, or a truncated read).
-2. **Full reads of known credential-store files**, by any means — shell
-   builtins (`cat`, `type`, `Get-Content`, `gc`), interpreter one-liners
-   (`python -c "open(...).read()"`, `node -e`, `perl`, PowerShell's
-   `[System.IO.File]::ReadAllText(...)`), or the Read tool directly. The
-   guard checks for an actual read construct alongside the filename, not
-   just the filename appearing anywhere — so a commit message or doc that
-   merely *mentions* `settings.json` doesn't trip it.
-3. **`claude mcp get <name>`** — prints a registered MCP server's stored
-   environment variables, including secrets, by design. Use `claude mcp
-   list` instead to check connection status without revealing values.
-4. **Content-mode Grep** against the same sensitive files — the matched
-   line for a `"KEY": "value"` config entry generally *is* the secret, so
-   narrowing the search pattern doesn't help if the output mode still
-   echoes the line.
+1. **Environment dumps** — `env`, `printenv`, bare `set`, `export -p`,
+   `declare -p`, and the PowerShell `Env:` / `Variable:` dumps, including the
+   dump-then-filter form (`env | grep -i token`) that v1's end-anchored pattern
+   missed.
+2. **Targeted credential-variable prints** — `echo $ANTHROPIC_API_KEY`,
+   `printenv GITHUB_TOKEN`, `[Environment]::GetEnvironmentVariable("...KEY")`.
+   This is the exact shape of the 2026-07-02 *founding* incident, which v1
+   never caught.
+3. **Reads of a credential store's content, by any means** — `cat`/`head`/
+   `tail`/`xxd`/`base64`/`strings`/`jq`/`awk`/…, interpreter one-liners
+   (`python -c open().read()`, `node`, `perl`, PowerShell `[IO.File]::…`),
+   `< file` redirection into a reader, the `Read` tool, content-mode `Grep`, or
+   any other tool's path field. Anything whose leading command isn't on the
+   safe allowlist and that names a sensitive path is denied.
+4. **`claude mcp get <name>`** — prints a registered server's stored env vars
+   (secrets) by design. Use `claude mcp list` to check status without values.
 
-The sensitive-file pattern covers this project's own secrets plus common
-credential stores it doesn't necessarily use yet: `settings.json`,
-`.claude.json`, `.env*`, `credentials*.json`, SSH private keys, `*.pem`,
-`~/.aws/credentials`, `~/.aws/config`, `.npmrc`, `.netrc`,
-`.docker/config.json`, `.kube/config`, `.pgpass`, gcloud's
-`application_default_credentials.json`, and the GitHub CLI's `hosts.yml`.
+The sensitive-path set covers the Claude config tree (`.claude/settings.json`,
+`.claude.json`), `.env*` and `.envrc`, `credentials*.json` and token caches,
+SSH and other private keys (`id_rsa`/`id_ed25519`/`id_ecdsa`/`*.pem`/`*.key`/
+`*.p12`/…), cloud CLIs (`~/.aws`, `~/.azure`, gcloud), package/registry stores
+(`.npmrc`, `.pypirc`, `.netrc`, `.docker/config.json`), infra
+(`.kube/config`, `.pgpass`, `*.tfstate`), `.git-credentials`, the GitHub CLI
+`hosts.yml`, shell history, and `/proc/*/environ`. Non-secret dotenv templates
+(`.env.example`, `.env.sample`, …) are explicitly allowed.
+
+### What it deliberately does *not* block
+
+The threat model is **non-adversarial agent mistakes**, not a determined local
+attacker — anyone with local code execution has already won (see `posture.md`).
+So a handful of shapes are left to the permission allowlist (no `$(...)`, no
+arbitrary shell control-flow) and to Layer 4 (rotate any credential that
+touches a transcript), not to this hook: copy-then-read laundering (`cp secret
+x; cat x`), indirection through a script the guard can't see into (`bash
+leak.sh`), wildcard/variable-assembled path names (`cat ~/.claud*.json`), and
+`MASK-OK` forgery. These are asserted as *allowed* in the test suite so the
+boundary is explicit — a well-meaning future change that blocks them (and
+starts causing false positives) fails a test on purpose.
 
 ## The MASK-OK escape hatch
 
-Sometimes a full unmasked read is genuinely necessary — a deliberate secret
-audit, for example. Add `MASK-OK` anywhere in a Bash or PowerShell command
-to skip all checks for that command. There's no equivalent for Read or
-Grep, since those tools don't carry a free-text command to put the marker
-in — fall back to Bash/PowerShell with `MASK-OK` instead.
+A full unmasked read is sometimes genuinely necessary — a deliberate secret
+audit. Add `MASK-OK` anywhere in a Bash or PowerShell command to skip all
+checks for that command. There's no equivalent for Read/Grep/other tools, since
+they carry no free-text command — fall back to Bash/PowerShell with `MASK-OK`.
 
 Exit code 0 allows the tool call; exit code 2 blocks it and surfaces the
-message on stderr to the model. The hook fails open (exits 0) on anything
-it can't parse, so a malformed payload never wedges the tool.
+message on stderr to the model. The hook fails **open** (exits 0) on an
+unparseable payload — a conscious availability-over-strictness choice for a
+guard whose threat model is honest mistakes, so a malformed payload never
+wedges the tool.
+
+## Tests: the adversarial suite (and CI)
+
+[`../tests/test_credential_guard.py`](../tests/test_credential_guard.py) is the
+mechanical version of the decoy smoke test below: one case (or more) per bypass
+shape in the ADR-003 taxonomy, plus the false-positive/allow cases that keep
+the guard usable. It drives the guard exactly as the harness does — a
+PreToolUse JSON payload on stdin, asserting exit 0/2 — using stdlib `unittest`
+only, so there's nothing to install. No real secret values appear in it; the
+guard keys on paths and command shapes, so the fixtures reference sensitive
+*paths* and fake variable *names*, never a token.
+
+```
+python -m unittest discover -s tests -p "test_*.py" -v
+```
+
+CI ([`../.github/workflows/ci.yml`](../.github/workflows/ci.yml)) runs it on
+every push and PR. The point (ADR-003 Phase 1): the next bypass is caught by a
+red build, not by a fifth postmortem.
+
+## Canonical source and the sync obligation
+
+Per [`../decisions/ADR-002-public-first-canonicality.md`](../decisions/ADR-002-public-first-canonicality.md),
+**this file is canonical**; the live deploy at `~/.claude/hooks/` and any
+machine-provisioning copies sync *from* here. The `hook-version` header is the
+drift tripwire — bumping it (as this rewrite did, 1 → 2) means every copy is now
+stale until re-synced. A guard that's been rewritten in the repo but not
+redeployed to a machine is not protecting that machine: "I wrote the guard" and
+"the guard is active here" are two separate facts that each have to be checked
+(the deployment-≠-authorship lesson from the uncapped-fanout postmortem).
 
 ## Wiring it into settings.json
 
 The hook is a single script invoked once per matching tool call via
 stdin/stdout, the standard shape for a Claude Code `PreToolUse` hook. In
-`settings.json`, add matcher entries under `hooks.PreToolUse` for each tool
-name this guard should see — `Bash`, `PowerShell`, `Read`, and `Grep` — each
-pointing its `command` at this script (e.g. `python3 /path/to/
-credential-guard.py`). Consult Claude Code's own hooks documentation for the
-exact matcher/command JSON shape, since that schema is versioned by the
-harness, not by this repo.
+`settings.json`, add matcher entries under `hooks.PreToolUse` pointing each
+matched tool's `command` at this script (e.g. `python3 /path/to/
+credential-guard.py`). Match as broad a set of tools as the schema allows —
+with v2's field-based coverage, every unmatched tool is a blind spot. Consult
+Claude Code's own hooks documentation for the exact matcher/command JSON shape,
+since that schema is versioned by the harness, not by this repo.
 
-## Verifying it: the decoy-file smoke test
+## Verifying the live install: the decoy-file smoke test
 
-Don't trust a code read alone — verify the guard actually blocks before
-relying on it:
+The automated suite proves the guard's *logic* against the repo copy. It does
+**not** prove the guard is installed and active on *this machine* — that's the
+separate fact above. Verify the live deploy with a decoy:
 
-1. Create a harmless decoy file with a shape the pattern should match, e.g.
+1. Create a harmless decoy with a shape the pattern matches, e.g.
    `credentials-test.json` containing a fake, obviously-not-real value.
-2. Try to read it through each covered path: `cat`/`Get-Content` in
-   Bash/PowerShell, a Read tool call, and a content-mode Grep. Each should
-   be blocked with the guard's message on stderr.
-3. Confirm `files_with_matches`/`count`-mode Grep against the same file
-   still succeeds — that mode is intentionally allowed.
-4. Try a Bash/PowerShell read with `MASK-OK` in the command and confirm it
-   goes through.
+2. Try to read it through each covered path: `cat`/`head`/`Get-Content` in
+   Bash/PowerShell, a Read tool call, a content-mode Grep, and a non-`cat`
+   reader like `base64`. Each should be blocked with the guard's message.
+3. Confirm `files_with_matches`/`count`-mode Grep and a metadata check
+   (`stat`/`Test-Path`) against the same file still succeed.
+4. Try a Bash/PowerShell read with `MASK-OK` and confirm it goes through.
 5. Delete the decoy file.
 
-This is the same method used to verify each extension in
-[`../incidents/`](../incidents/) before it was committed — a hook that looks
-right on inspection but hasn't been exercised against a real blocked and
-real allowed case isn't verified yet.
+A hook that looks right on inspection but hasn't been exercised against a real
+blocked case and a real allowed case — on the machine that's supposed to be
+protected — isn't verified yet.
