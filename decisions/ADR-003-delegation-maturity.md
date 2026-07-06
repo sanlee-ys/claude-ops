@@ -120,11 +120,14 @@ autonomy).
 task class running at full autonomy with <20% rework; every autonomy promotion
 justified by a verifier, not a feeling.
 
-**Status (2026-07-06):** v0 policy written —
-[`delegation-policy.md`](../delegation-policy.md), the 3-rung ladder (plan →
-autonomous+verify → orchestrated fan-out) with a task-class-to-verifier table.
-Its experiment log is seeded with 7 outcomes from this session's Phase 2 work;
-3 more before the first recalibration.
+**Status (2026-07-06): exit criterion met.**
+[`delegation-policy.md`](../delegation-policy.md) holds the 3-rung ladder (plan →
+autonomous+verify → orchestrated fan-out), a task-class-to-verifier table, and an
+experiment log of **10 outcomes** with **Recalibration 1**. Security-control /
+infra code is confirmed at full autonomy (L1) with 0% rework across 5 tasks; the
+recalibration is deliberately conservative about the rest (single-session sample,
+so promotions require n ≥ 3). Every confirmation is tied to a named verifier.
+Phase 3 is closed on the build side.
 
 ## Deferred backlog — do not start until Phase 1–3 close
 
