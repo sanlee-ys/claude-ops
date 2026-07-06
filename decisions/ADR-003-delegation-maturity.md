@@ -67,8 +67,12 @@ copy-pasted into eleven repos' `CLAUDE.md` files is the visible symptom.
 
 1. **Single-source shared blocks.** Extend the hook-sync script (or a sibling)
    to manage `CLAUDE.md` sections the same way it manages hooks: canonical text
-   in the private config repo, marker comments in consumers, a `--check` drift
-   mode wired into CI.
+   in one place, marker comments in consumers, a `--check` drift mode wired into
+   CI. **Decided in build (2026-07-06):** the canonical home is *this repo*
+   (`conventions/`), public — not the private config repo the draft assumed.
+   Six consumers are public and a public `CLAUDE.md` pointing at a private repo
+   both 404s for outsiders and discloses that the private repo exists; claude-ops
+   is already the operating-layer canon (ADR-002) and resolves for everyone.
 2. **Prune by the enforcement test.** For every rule, ask whether it's
    mechanically enforced (hook / CI / pre-commit). If yes, shrink the prose to a
    one-line pointer at the enforcer. If no and it matters, build the enforcer
@@ -78,9 +82,22 @@ copy-pasted into eleven repos' `CLAUDE.md` files is the visible symptom.
    track it over time like an eval metric instead of letting rule mass grow
    silently.
 
-**Exit criterion:** shared blocks single-sourced with a CI drift check; total
-`CLAUDE.md` token mass down materially (target: 40%); zero rules duplicating a
-mechanical control.
+**Exit criterion:** shared blocks single-sourced with a drift check; zero rules
+duplicating a mechanical control; total `CLAUDE.md` token mass down materially.
+
+**Measured (2026-07-06).** The 40% figure the draft floated assumed the rule
+surface was bloated with duplication. The audit disproved that: across the 11
+`CLAUDE.md` files (~9,885 tokens) there was exactly *one* truly fleet-wide
+duplicated block (`links-verify`, in 10 repos); everything else is legitimate
+per-repo content. Single-sourcing that block plus compressing the one remaining
+rule that duplicated a mechanical control (career's fan-out cap) took the mass
+down **~16%** without deleting a single useful doc. Reaching 40% would have
+meant gutting real per-repo guidance — a worse outcome than a slightly higher
+token count. So the revised target is qualitative, not 40%: the low percentage
+reflects low duplication, not an unmet goal. The structural win — edit the rule
+once, `--check` catches drift, no rule re-argues an enforced control — is the
+deliverable; the token drop is a side effect. The one piece left is wiring
+`--check` into automated CI (it runs locally today, like `sync-claude-hooks`).
 
 ## Phase 3 — Calibrated delegation
 
