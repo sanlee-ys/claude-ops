@@ -64,11 +64,38 @@ verifier before more autonomy. Repo names are omitted where private.
 | 2026-07-06 | Wire the shared-block drift check into CI | security/infra code | L1 | accepted — proven by a live run |
 | 2026-07-06 | Fix a stale generated site + add a regeneration drift gate (learning-notes) | static site / CI infra | L1 | accepted — new gate went green live, would have caught the drift |
 | 2026-07-06 | Build the private-repo guard, layers A+B (slug allowlist + disclosure phrases) | security-control code | L0→L1 | accepted — plan approved first; adversarial suite caught 2 real bugs pre-merge, live gate proven in CI |
+| 2026-07-06 | Build the private-repo guard, layer C (local pre-commit for bare names) | security-control code | L0→L1 | accepted — smoke-tested end-to-end (decoy blocked), adversarial suite green in CI |
 
-**9 logged; 1 more before the first recalibration.**
+**10 logged — first recalibration below.**
 
-Early signal (pre-recalibration, not yet acted on): no task has needed rework
-once its verifier was in place; the two bugs the private-repo suite caught were
-stopped *by the verifier before merge*, which is the mechanism working, not
-rework. Security-control and cross-repo-sweep classes are trending toward
-staying at their earned rungs.
+## Recalibration 1 (2026-07-06)
+
+**Basis:** 10 outcomes, all accepted, zero post-verifier rework.
+
+**Honest caveat on the sample.** All 10 come from a single session, one operator,
+one day. That is low diversity — no independent reviewer, no second executor
+model, and "accepted" was partly self-assessed. So this round demonstrates the
+*mechanism* (a verifier catches issues before merge — twice, concretely) more
+than it proves broad autonomy is safe. Promotions are therefore conservative: a
+class moves only with n ≥ 3; smaller classes stay put and keep logging.
+
+| Class | n | Rework | Verdict |
+|---|---|---|---|
+| security-control / infra code | 5 | 0% | **Confirmed at L1** — each shipped with its own adversarial suite / CI gate as the verifier. The class that satisfies the exit criterion (≥1 class at full autonomy, <20% rework). |
+| prose/docs (mechanical) | 2 | 0% | **Confirmed at L1** — redline-guard + human read as the verifier. |
+| docs w/ judgment | 1 | 0% | Hold at L0 — clean but n=1; approve-first is cheap insurance where correctness is a matter of taste. |
+| research fan-out | 1 | 0% | Hold at L2 (capped) — the token cap stays mandatory. |
+| cross-repo sweep | 1 | 0% | Hold at L2 — n=1. |
+
+No class generated rework, so none needs verifier-remediation this round. The two
+bugs the private-repo suite caught were stopped *before merge* — the verifier
+working, not rework.
+
+**Next round:** log across more sessions and executor models (diversity is the
+missing axis) before any further promotion; revisit at ~20 outcomes, or
+immediately if a class first generates rework.
+
+**Phase 3 exit criterion — met.** Written policy grounded in ≥10 outcomes; one
+class (security-control) running at full autonomy with 0% rework; every
+confirmation tied to a named verifier, and the un-promoted classes held for lack
+of evidence, not feeling.
