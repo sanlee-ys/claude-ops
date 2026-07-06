@@ -62,5 +62,13 @@ verifier before more autonomy. Repo names are omitted where private.
 | 2026-07-06 | Targeted doc refresh: compress an enforced rule + refresh a stale scope section | docs w/ judgment | L0→L1 | accepted after 2 approvals |
 | 2026-07-06 | Amend ADR-003 Phase 2 to measured reality | prose/docs | L1 | accepted |
 | 2026-07-06 | Wire the shared-block drift check into CI | security/infra code | L1 | accepted — proven by a live run |
+| 2026-07-06 | Fix a stale generated site + add a regeneration drift gate (learning-notes) | static site / CI infra | L1 | accepted — new gate went green live, would have caught the drift |
+| 2026-07-06 | Build the private-repo guard, layers A+B (slug allowlist + disclosure phrases) | security-control code | L0→L1 | accepted — plan approved first; adversarial suite caught 2 real bugs pre-merge, live gate proven in CI |
 
-**7 logged; 3 more before the first recalibration.**
+**9 logged; 1 more before the first recalibration.**
+
+Early signal (pre-recalibration, not yet acted on): no task has needed rework
+once its verifier was in place; the two bugs the private-repo suite caught were
+stopped *by the verifier before merge*, which is the mechanism working, not
+rework. Security-control and cross-repo-sweep classes are trending toward
+staying at their earned rungs.
