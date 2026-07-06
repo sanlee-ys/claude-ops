@@ -272,7 +272,10 @@ _GIT_READ_SUB = {
     "whatchanged", "ls-tree", "ls-files",
 }
 _GIT_DANGER_FLAG = re.compile(
-    r"(?<!\w)-c\s|--to-|core\.pager|(?<!\w)-p\b|--patch\b|(?<!\w)-[GS]\b"
+    # `git -c key=val` (config injection) — anchored to the git-global position
+    # so the `commit -c <commit>` reuse-message subcommand option isn't
+    # conflated with it (red-team round 6, LOW false positive).
+    r"\bgit\s+-c\s|--to-|core\.pager|(?<!\w)-p\b|--patch\b|(?<!\w)-[GS]\b"
     # -F/--file reads the named file as the message (unlike -m prose), so a
     # sensitive -F arg is a real content read (red-team round 5, #2).
     r"|(?<!\w)-F\b|--file(=|\b)"

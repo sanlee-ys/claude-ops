@@ -395,6 +395,14 @@ class TestRedTeamRound5(GuardTestCase):
         # -F with a non-secret message file is fine
         self.assertAllowed(*self.bash("git commit -F COMMIT_MSG.txt"))
 
+    def test_3_git_commit_reuse_message_option_not_config_injection(self):
+        # `commit -c <commit>` (reuse+edit) must not be read as global `-c` config
+        # injection; committing a path is not a content print (round 6, LOW FP).
+        self.assertAllowed(*self.bash("git commit -c HEAD -- /home/user/.env"))
+        # the genuine config-injection / pager forms still block
+        self.assertBlocked(*self.bash("git -c core.pager=cat show HEAD:.env"))
+        self.assertBlocked(*self.bash("git -c alias.x='!printenv KEY' x"))
+
 
 class TestFalsePositives(GuardTestCase):
     """The discipline that killed v1's first over-broad draft: routine work
