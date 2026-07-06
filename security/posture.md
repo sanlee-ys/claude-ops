@@ -81,12 +81,16 @@ downstream, by the hook.
 
 ## Layer 2: the mechanical guard (what is blocked outright)
 
-A `PreToolUse` hook (`credential-guard.py`, a snapshot of which lives in
-this repo) inspects tool calls before they run and blocks the ones that
+A `PreToolUse` hook (`credential-guard.py`, the canonical copy of which lives
+in this repo) inspects tool calls before they run and blocks the ones that
 would expose a credential, regardless of whether the underlying command was
-otherwise allowlisted. It's wired to four tools: Bash, PowerShell, Read, and
-content-mode Grep. The exact blocked patterns, the sensitive-file list, and
-the escape-hatch mechanics live in
+otherwise allowlisted. As of the v2 rewrite (ADR-003 Phase 1) it matches
+**all** tools, not a named few: coverage is keyed on whether a call's
+path-bearing field targets a sensitive file, so Read, content-mode Grep, and
+any not-yet-existing tool that reaches a credential path are all in scope by
+construction rather than by enumeration — the structural fix for limits #1–#3
+below. The exact blocked patterns, the sensitive-file list, and the
+escape-hatch mechanics live in
 [`security/README.md`](README.md#what-it-blocks); what belongs here is why
 each category is in scope.
 
@@ -194,6 +198,21 @@ as compromised, full stop. This is the layer that assumes the first three
 will eventually fail again in some new shape, and makes sure that failure
 is bounded to "rotate one credential," not "trust a possibly-burned one
 indefinitely."
+
+**Why rotation and not cleanup.** A secret that reached a transcript cannot be
+un-leaked by fixing the file it came from. The exposure and its source are two
+different artifacts: moving a token into a keystore and scrubbing the plaintext
+config leaves every *prior* session's transcript on disk untouched, each one
+still holding the value exactly as the command printed it. Those transcripts
+are append-only history, and on a machine that syncs or backs up session
+history they may exist in more than one place. So "I cleaned up the config" is
+never "the secret is safe" — the config is now clean and the leaked bytes are
+still sitting in the logs. The only action that actually bounds the exposure is
+rotating the credential so those bytes stop being valid. This is the whole
+reason Layer 4 is rotation and not redaction: you can reliably invalidate a
+secret, you cannot reliably erase every copy of one. (Deleting the offending
+transcript is fine hygiene, but it's cleanup *after* rotation, never instead of
+it — you can't prove you got every copy.)
 
 ## The honest core lesson
 
