@@ -234,10 +234,9 @@ SAFE_COMMANDS = {
     # file management (no file content to stdout)
     "rm", "unlink", "rmdir", "mkdir", "touch", "chmod", "chown", "chgrp",
     "truncate", "mv", "cp", "ln", "install", "mktemp", "shred",
-    # version control (git never cats an arbitrary FS path to stdout; a commit
-    # message quoting a sensitive path is the false positive v1's first draft
-    # died on — keep it allowed)
-    "git",
+    # NB: `git` is NOT here — it reads from the object store and via `-f`/`-c`
+    # (git show / cat-file / grep / diff / config -f / -c core.pager=cat), so it
+    # is classified per-subcommand in _reads_sensitive_path, not trusted wholesale.
     # PowerShell metadata / file-management cmdlets
     "test-path", "get-item", "get-childitem", "resolve-path", "split-path",
     "remove-item", "new-item", "move-item", "copy-item", "rename-item",
@@ -256,6 +255,80 @@ GREP_SAFE_FLAG = re.compile(
 _WRAPPERS = {"sudo", "command", "time", "nice", "nohup", "exec", "builtin",
              "\\", "then", "do", "else", "elif"}
 _SUBSTITUTION = re.compile(r"\$\(|`|<\(")  # command / process substitution
+
+# git subcommands that never print file/object content (they only NAME paths,
+# e.g. in a `-m` message) vs. those that do. A git segment naming a sensitive
+# path is a read unless its subcommand is benign and it carries no
+# content-forcing flag (-p/--patch/-G/-S), config injection (-c), pager
+# override, or command substitution.
+_GIT_SAFE_SUB = {
+    "add", "commit", "status", "push", "pull", "fetch", "clone", "checkout",
+    "switch", "branch", "tag", "stash", "init", "remote", "reset", "restore",
+    "mv", "rm", "merge", "rebase", "cherry-pick", "revert", "describe",
+    "rev-parse", "notes", "log",
+}
+_GIT_READ_SUB = {
+    "show", "cat-file", "grep", "diff", "blame", "annotate", "config", "var",
+    "whatchanged", "ls-tree", "ls-files",
+}
+_GIT_DANGER_FLAG = re.compile(
+    r"(?<!\w)-c\s|--to-|core\.pager|(?<!\w)-p\b|--patch\b|(?<!\w)-[GS]\b"
+)
+# Message-bearing git subcommands: their arg is prose, so the env-dump /
+# credential-var / mcp-get checks (which would false-positive on a commit
+# message discussing those forms) are skipped for these — and ONLY these, so a
+# `git -c alias.x='!printenv KEY' x` alias-exec is still checked (round 4, #2).
+_GIT_MSG_CMD = re.compile(r"^\s*git\s+(commit|tag|stash|notes)\b", re.IGNORECASE)
+# A git `-c <key>=!<cmd>` sets a shell-escape alias — arbitrary code execution
+# (hence arbitrary secret exfil) config-injected into one invocation. It's the
+# same arbitrary-exec class as $(...) / `bash x.sh`, but since it wears a `git`
+# disguise the message-command skip would wave the env/var checks through, so
+# block the form itself (red-team round 4, #2).
+_GIT_ALIAS_EXEC = re.compile(r"\bgit\b.*?-c\s+[\w.]+=\s*['\"]?!")
+
+
+def _git_subcommand(seg):
+    """The git subcommand, skipping global flags (`-c name=val`, `-C dir`)."""
+    toks = seg.strip().split()
+    i = 1  # toks[0] is the normalized `git`
+    while i < len(toks):
+        t = toks[i]
+        if t in ("-c", "-C", "--exec-path", "--git-dir", "--work-tree"):
+            i += 2
+            continue
+        if t.startswith("-"):
+            i += 1
+            continue
+        return t.lower()
+    return ""
+
+
+def _split_segments(command):
+    """Split a command into pipeline/list segments on shell operators
+    (`&&`, `||`, `|`, `;`, `&`, newline) but NOT inside quotes — a `&` or `|`
+    within a "..." commit message must not create a spurious segment
+    (red-team round 4, #3)."""
+    segs, buf, quote, i, n = [], [], None, 0, len(command)
+    while i < n:
+        c = command[i]
+        if quote:
+            buf.append(c)
+            if c == quote:
+                quote = None
+            i += 1
+        elif c in ("'", '"'):
+            quote = c
+            buf.append(c)
+            i += 1
+        elif command[i:i + 2] in ("&&", "||"):
+            segs.append("".join(buf)); buf = []; i += 2
+        elif c in (";", "\n", "|", "&"):
+            segs.append("".join(buf)); buf = []; i += 1
+        else:
+            buf.append(c)
+            i += 1
+    segs.append("".join(buf))
+    return segs
 
 
 def _leading_command(seg):
@@ -311,6 +384,15 @@ def _reads_sensitive_path(seg):
         return not GREP_SAFE_FLAG.search(seg)          # content grep = read
     if lead == "tar":
         return bool(_TAR_TO_STDOUT.search(seg) or _SUBSTITUTION.search(seg))
+    if lead == "git":
+        # git prints object/file content via show/cat-file/grep/diff/config -f,
+        # `-c core.pager=cat`, or `log -p`. commit/add/etc. only name the path.
+        if _SUBSTITUTION.search(seg) or _GIT_DANGER_FLAG.search(seg):
+            return True
+        sub = _git_subcommand(seg)
+        if sub in _GIT_READ_SUB:
+            return True
+        return sub not in _GIT_SAFE_SUB                # unknown subcommand → deny
     if lead in SAFE_COMMANDS:
         if lead == "find" and re.search(r"-exec(dir)?\b", seg):
             return True                                # find -exec <reader>
@@ -360,6 +442,12 @@ _MSG_MCP = (
     "vars (including secrets) in the clear. Use `claude mcp list` to check\n"
     "connection status without revealing values, or Bash with MASK-OK if you\n"
     "genuinely need the stored value.\n"
+)
+_MSG_GIT = (
+    "CREDENTIAL GUARD: `git -c <key>=!<cmd>` config-injects a shell alias —\n"
+    "arbitrary command execution that can read any secret while wearing a git\n"
+    "disguise. Run the intended command directly (so the guard can see it),\n"
+    "not through a git alias escape.\n"
 )
 
 # A tool-input field carries a path if its NAME looks path-like. Checked on ALL
@@ -437,23 +525,34 @@ def main():
         if not command or "MASK-OK" in command:
             sys.exit(0)
         command = _strip_heredocs(command)
-        # A sensitive path piped into xargs becomes an argument to the
-        # downstream reader, so `echo ~/.env | xargs cat` reads it even though
-        # neither segment alone names a read of the path (red-team round 3, #2).
-        if re.search(r"\|\s*xargs\b", command) and _has_sensitive_path(command):
-            block(_MSG_PATH)
-        # Split on every shell separator, INCLUDING a single `&` — backgrounding
-        # (`true & cat ~/.env`) otherwise kept the reader in one segment behind a
-        # safe leading command (round 3, #1). `&&` is matched before `&`.
-        for seg in re.split(r"\|\||&&|&|[;\n]|\|", command):
+        # `echo <path> | xargs <reader>` feeds the path to a downstream reader
+        # across segment boundaries (round 3, #2). Only the pipeline stage that
+        # actually EMITS the path (echo/printf/ls/find/…) counts — `git log --
+        # .env | xargs echo` emits hashes, not the file, so it isn't a read
+        # (round 4, #4).
+        xm = re.search(r"\|\s*xargs\b", command)
+        if xm:
+            producer = re.split(r"[;\n&]|&&|\|\||\|", command[:xm.start()])[-1]
+            producer = producer.split("#")[0]
+            if _leading_command(producer) in (
+                    "echo", "printf", "print", "ls", "find", "realpath",
+                    "readlink") and _has_sensitive_path(producer):
+                block(_MSG_PATH)
+        # Quote-aware split on every shell separator, including a single `&`
+        # (backgrounding — `true & cat ~/.env` otherwise hid the reader behind a
+        # safe leading command, round 3 #1) but not inside quotes (round 4 #3).
+        for seg in _split_segments(command):
             seg = seg.strip()
             if not seg:
                 continue
-            # git segments are VCS/prose — they never dump env, print a var, or
-            # run `mcp get`, and a commit message discussing those forms is a
-            # false positive (round 3, #4). The sensitive-path read check still
-            # runs; it correctly blocks `git commit -m "$(cat .env)"`.
-            if _leading_command(seg) != "git":
+            # A git message-bearing subcommand's arg is prose, so skip the
+            # command-shape checks (env/var/mcp) that would false-positive on a
+            # commit message discussing them (round 3 #4) — but NOT for other
+            # git forms, so `git -c alias.x='!printenv KEY' x` is still caught
+            # (round 4 #2). The sensitive-path read check always runs.
+            if _GIT_ALIAS_EXEC.search(seg):
+                block(_MSG_GIT)
+            if not _GIT_MSG_CMD.match(seg):
                 if ENV_DUMP_PATTERN.search(seg):
                     block(_MSG_ENV)
                 if CRED_VAR_READ.search(seg):

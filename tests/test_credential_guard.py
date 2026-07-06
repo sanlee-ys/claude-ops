@@ -329,6 +329,51 @@ class TestRedTeamRound3(GuardTestCase):
         self.assertBlocked("Read", {"source": {"inner": "/home/user/.claude.json"}})
 
 
+class TestRedTeamRound4(GuardTestCase):
+    """Fourth pass — git trusted too broadly (two HIGH) plus round-3 FPs."""
+
+    def test_1_git_content_printing_subcommands_blocked(self):
+        for cmd in [
+            "git config -f /home/user/.git-credentials --list",
+            "git show HEAD:terraform.tfstate",
+            "git cat-file -p HEAD:.env",
+            "git show :.env",
+            "git grep SECRET HEAD -- /home/user/.env",
+            "git diff HEAD -- /home/user/.env",
+            "git -c core.pager=cat show HEAD:.env",
+            "git log -p -- /home/user/.env",
+        ]:
+            self.assertBlocked(*self.bash(cmd), msg=cmd)
+
+    def test_1_benign_git_naming_path_allowed(self):
+        for cmd in [
+            'git commit -m "fix the cat ~/.claude.json leak"',
+            "git add .env",
+            "git log -- /home/user/.env",
+            "git status",
+        ]:
+            self.assertAllowed(*self.bash(cmd), msg=cmd)
+
+    def test_2_git_alias_exec_env_read_blocked(self):
+        self.assertBlocked(*self.bash(
+            'git -c alias.x="!printenv ANTHROPIC_API_KEY" x'))
+        self.assertBlocked(*self.bash("git -c alias.leak='!env' leak"))
+        # the round-3 prose exemption for real commit messages still holds
+        self.assertAllowed(*self.bash(
+            "git commit -m \"use GetValue('env:MY_API_KEY') helper\""))
+
+    def test_3_ampersand_inside_quotes_not_split(self):
+        self.assertAllowed(*self.bash('git commit -m "handle a & b about .env"'))
+        self.assertAllowed(*self.bash('echo "a & b about .env"'))
+        # ...but a real backgrounded read still splits and blocks
+        self.assertBlocked(*self.bash("true & cat /home/user/.env"))
+
+    def test_4_xargs_precheck_only_on_emitting_producer(self):
+        self.assertAllowed(*self.bash("git log -- .env | xargs echo"))
+        self.assertAllowed(*self.bash("echo hello | xargs echo"))
+        self.assertBlocked(*self.bash("echo ~/.env | xargs cat"))
+
+
 class TestFalsePositives(GuardTestCase):
     """The discipline that killed v1's first over-broad draft: routine work
     that merely NAMES a sensitive path, or checks its existence, must pass."""
