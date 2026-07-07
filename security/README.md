@@ -135,16 +135,55 @@ redeployed to a machine is not protecting that machine: "I wrote the guard" and
 "the guard is active here" are two separate facts that each have to be checked
 (the deployment-≠-authorship lesson from the uncapped-fanout postmortem).
 
-## Wiring it into settings.json
+## Installing it (standalone)
 
-The hook is a single script invoked once per matching tool call via
-stdin/stdout, the standard shape for a Claude Code `PreToolUse` hook. In
-`settings.json`, add matcher entries under `hooks.PreToolUse` pointing each
-matched tool's `command` at this script (e.g. `python3 /path/to/
-credential-guard.py`). Match as broad a set of tools as the schema allows —
-with v2's field-based coverage, every unmatched tool is a blind spot. Consult
-Claude Code's own hooks documentation for the exact matcher/command JSON shape,
-since that schema is versioned by the harness, not by this repo.
+`credential-guard.py` is a self-contained, **stdlib-only** Python 3 script
+(`sys`, `json`, `re` — nothing to `pip install`, no package, no dependencies).
+Installing it is two steps: drop the file somewhere Claude Code can run it, and
+point a `PreToolUse` hook at it.
+
+1. **Get the file.** Copy it anywhere on the machine; the convention is
+   `~/.claude/hooks/`:
+
+   ```sh
+   mkdir -p ~/.claude/hooks
+   curl -fsSL https://raw.githubusercontent.com/sanlee-ys/claude-ops/main/security/credential-guard.py \
+     -o ~/.claude/hooks/credential-guard.py
+   ```
+
+2. **Wire the hook** in `~/.claude/settings.json`. The hook is a single script
+   invoked once per matching tool call via stdin/stdout — the standard shape
+   for a Claude Code `PreToolUse` hook. Match `*` (every tool): with v2's
+   field-based coverage, any unmatched tool is a blind spot, so a single
+   wildcard matcher is both the simplest and the most complete wiring.
+
+   ```json
+   {
+     "hooks": {
+       "PreToolUse": [
+         {
+           "matcher": "*",
+           "hooks": [
+             {
+               "type": "command",
+               "command": "python3 \"$HOME/.claude/hooks/credential-guard.py\""
+             }
+           ]
+         }
+       ]
+     }
+   }
+   ```
+
+   This is the exact shape we run in production (minus an unrelated fan-out
+   guard on the `Workflow` matcher). On Windows, ensure a `python3` (or an
+   aliased `python`) is on `PATH`, or the hook fails open. The matcher/command
+   JSON schema is versioned by the Claude Code harness, not by this repo — if a
+   future version changes it, this block is the thing to re-check; consult
+   Claude Code's own hooks documentation for the current shape.
+
+Then verify it's actually live with the decoy smoke test below — installed and
+active are two separate facts.
 
 ## Verifying the live install: the decoy-file smoke test
 
