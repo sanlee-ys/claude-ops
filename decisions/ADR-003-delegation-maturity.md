@@ -144,6 +144,38 @@ lands. Listed here so the idea isn't lost — **not** as a queued task:
 the gap is in discipline and verification, not in tooling surface. Revisit this
 list only after Phase 1–3's exit criteria are all met.
 
+### Backlog disposition — 2026-07-06 (gate now open)
+
+Phases 1–3 are closed on the build side, so the gate above is lifted. A
+follow-up brainstorm of candidate claude-ops scripts was triaged with San.
+Open ≠ auto-queued, so each was dispositioned explicitly:
+
+- **Generic stale-generated-file CI gate — QUEUED for a build session.**
+  Generalizes the learning-notes fix (its `generated-files` CI job): run the
+  repo's build, `git diff`, fail if committed generated artifacts drifted from
+  source. Deterministic (no fuzzy judgment), reusable across every repo that
+  commits build output (portfolio, the architecture portal, learning-notes,
+  graphify outputs). The only per-repo variable is the build command + the
+  watched paths — a small config, not new logic per repo. Low design risk;
+  Sonnet/Opus build once scoped. It's a distinct multi-repo deliverable, so
+  it's its own session, not folded into this one.
+- **`redline-guard.py` portability — INVESTIGATED, parked.** Unlike
+  `credential-guard.py` (which generalized cleanly — see PR packaging it for
+  external use — because credential *shapes* are universal), redline-guard's
+  policy is intrinsically owner-specific: the owner slug is hardcoded and its
+  job is "don't leak *this* owner's identifiers into *this* public repo." The
+  engine (scan staged diff → mask → block) is generic, but externalizing it
+  means fully extracting owner-slug + all identifying terms into config (only
+  half-done today via `.redlines.local`) and shipping engine + an example
+  config — more surgery than the credential-guard packaging, for lower payoff.
+  Not worth it now.
+- **"Lint CLAUDE.md for unenforced rules" — REJECTED as a script; folded into
+  the periodic assisted audit.** Deciding whether a natural-language "never X"
+  rule *is* enforced by some hook/CI is a fuzzy mapping — an LLM-judge task,
+  not a deterministic linter. A regex version would be false-positive soup and
+  Goodhart bait (the exact failure mode this ADR is about). It belongs in the
+  config/memory audit cadence as an assisted step, not a CI gate.
+
 ## Sequencing
 
 **Phase 1 first.** It's the only phase with live risk attached (an active
