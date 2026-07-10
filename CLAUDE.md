@@ -10,6 +10,10 @@ Claude operating layer (see
 - **Shared cross-repo blocks** — single-sourced here, mirrored into sibling
   repos' `CLAUDE.md` as compressed pointers: [`conventions/`](conventions/).
   Propagate or drift-check with `python scripts/sync-shared-blocks.py [--check]`.
+- **Stale-generated-file gate** — reusable CI check for repos that commit
+  build output: [`scripts/check-generated-drift.py`](scripts/check-generated-drift.py)
+  + the `workflow_call` wrapper in `.github/workflows/generated-drift.yml`
+  (consumer wiring: [`scripts/README.md`](scripts/README.md)).
 - **Delegation policy** — task classes × autonomy levels, each gated on a
   verifier: [`delegation-policy.md`](delegation-policy.md).
 - **Decisions:** [`decisions/`](decisions/). **Incidents:** [`incidents/`](incidents/).
