@@ -255,6 +255,23 @@ secret, you cannot reliably erase every copy of one. (Deleting the offending
 transcript is fine hygiene, but it's cleanup *after* rotation, never instead of
 it — you can't prove you got every copy.)
 
+## Account-level guardrails (verified in the Console, 2026-07-13)
+
+The layers above are all machine-local. The API account itself is the layer
+beneath them, and its state was verified in the Console rather than assumed:
+a monthly spend limit is set with an email notification below it (bounding
+what a runaway loop or a leaked key can spend before a human notices), the
+consumer-plan model-training toggle is confirmed off, and API keys are
+scoped per consumer with expiries — one consumer still lacks its own key,
+recorded here as the open item rather than rounded up to done.
+
+One measurement surprise, kept for honesty: the classifier project's
+per-call `cache_control` marker is currently inert — its cacheable prefix
+sits well under the model's documented minimum cacheable-prefix floor,
+confirmed live with the cache-diagnosis beta rather than inferred from
+docs. "Caching enabled in code" and "caching active in production" are
+different claims; only a measurement distinguishes them.
+
 ## The honest core lesson
 
 Two things, stated plainly because dressing them up would undersell them:
