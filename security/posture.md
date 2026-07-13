@@ -79,6 +79,47 @@ vector: the allowlist can't distinguish "read a source file" from "read a
 credential file" by command shape alone. That distinction has to be made
 downstream, by the hook.
 
+### Layer 1 update (2026-07-12): auto mode, and an explicit deny/ask floor beneath it
+
+Permission evaluation now runs in Claude Code's native auto mode
+(`defaultMode: "auto"` with `classifyAllShell`): a classifier model reviews
+each shell command and prompts only on escalation or destructive shapes.
+This natively supersedes the interim fail-closed "safe command auto-allow"
+PreToolUse hook built during the permission-friction investigation; that
+hook is retired. The allowlist itself stays, deliberately: explicit allow
+rules are a deterministic fast path evaluated before any classifier call,
+and they still govern entirely in non-auto modes.
+
+Auto mode changed one assumption this document previously relied on:
+"absent from the allowlist" no longer guarantees a prompt — the classifier
+decides. So the gates that used to be enforced by *omission* are now
+enforced by *explicit rules*, restoring the hard guarantee (rules evaluate
+deny → ask → allow, and per the documented precedence a deny survives every
+permission mode, including bypass):
+
+- **`ask` rules** pin the destructive git verbs (`reset`, `clean`,
+  `branch -D`, force-push) and `rm -rf` behind a prompt in every shape
+  (bare and `-C`, both shells) — a hard floor the classifier's soft
+  judgment cannot loosen.
+- **`deny` rules** natively mirror the credential files the guard (Layer 2)
+  already blocks (`.env`, the MCP config file, SSH private keys, cloud CLI
+  credentials) for the Read tool. This is a floor *beneath* the hook, not a
+  replacement: documented deny rules do not reach a subprocess that
+  `open()`s a file or a PowerShell reader, which is exactly why the
+  interpreter-agnostic guard remains the load-bearing backstop.
+- **`disableBypassPermissionsMode`** closes the one-keystroke switch into
+  bypass mode. Set at user scope, this guards against an *accidental*
+  toggle, not a hostile override — only managed settings would be
+  un-overridable, a rigidity deliberately not adopted on a single-user
+  machine (yet; recorded as an open decision).
+
+Also evaluated and recorded: Claude Code's OS-enforced sandbox (credential
+isolation, filesystem and network egress control) does not run on native
+Windows — macOS/Linux/WSL2 only, per the official sandboxing docs. The
+layered stack in this document is the deliberate substitute on this
+platform, and network egress control is the one capability class it still
+lacks; closing that gap would require a WSL2 migration, which is parked.
+
 ## Layer 2: the mechanical guard (what is blocked outright)
 
 A `PreToolUse` hook (`credential-guard.py`, the canonical copy of which lives
