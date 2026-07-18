@@ -130,10 +130,35 @@ Per [`../decisions/ADR-002-public-first-canonicality.md`](../decisions/ADR-002-p
 **this file is canonical**; the live deploy at `~/.claude/hooks/` and any
 machine-provisioning copies sync *from* here. The `hook-version` header is the
 drift tripwire — bumping it (as this rewrite did, 1 → 2) means every copy is now
-stale until re-synced. A guard that's been rewritten in the repo but not
+stale until re-synced. The major digit is the architecture generation (1 =
+enumerated denylist, 2 = path-based default-deny); a **minor** bump (2 → 2.1) is
+the same architecture with corrected behaviour, and still means every copy is
+stale. A guard that's been rewritten in the repo but not
 redeployed to a machine is not protecting that machine: "I wrote the guard" and
 "the guard is active here" are two separate facts that each have to be checked
 (the deployment-≠-authorship lesson from the uncapped-fanout postmortem).
+
+## Prose arguments vs. path positions (v2.1)
+
+A credential-store *name* mentioned in a message flag is prose, not a read.
+`gh pr create --title "chore: add .env to .gitignore"` is allowed as of v2.1:
+the value of an explicitly prose-bearing flag (`-m`, `--message`, `--title`,
+`--body`, `--description`, `--notes`, `--comment`, `--summary`, `--subject`,
+`--reason`, `--caption`) is treated as a message rather than a path position.
+
+The exemption is deliberately narrow, and **still blocks** three neighbouring
+shapes — these are not bugs, they are the fix's guard rails:
+
+| Shape | Why it still blocks | What to do |
+| --- | --- | --- |
+| `--body-file X` / `-F X` / `--notes-file X` | These really do read `X`; posting `.env` into a PR body is exfil. `--body` does not match `--body-file`. | Correct — don't pass a credential file. |
+| `--body /home/user/.env` (unquoted) | An unquoted value is an ordinary argument position, indistinguishable from a path. | Quote it: `--body "...".` |
+| `--body "$(cat ~/.env)"` / `--body "$TOKEN"` | A `$` or backtick can expand a secret into the published message. | Use literal prose, or a `--body-file` pointing at a non-secret file. |
+
+If prose genuinely trips the guard anyway (an unlisted flag, or text that must
+contain a `$`), the workaround is to move the text into a file and pass it with
+`--body-file` / `-F` — a non-sensitive path there is allowed, and it keeps the
+default-deny posture intact rather than widening the flag allowlist.
 
 ## Installing it (standalone)
 

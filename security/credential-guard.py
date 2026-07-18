@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
-# hook-version: 2 (canonical: THIS file, per decisions/ADR-002 — the live
+# hook-version: 2.1 (canonical: THIS file, per decisions/ADR-002 — the live
 # deploy at ~/.claude/hooks/ and any provisioning copies sync FROM here)
+# 2.1 (2026-07-18): prose-flag false-positive fix; a copy still reporting 2 is
+# stale. Minor bump = same v2 architecture, corrected behaviour.
 """Credential exposure guard (global PreToolUse hook) — path-based default-deny.
 
 v2 (2026-07-06, claude-ops decisions/ADR-003 Phase 1). v1 enumerated the *read
@@ -215,6 +217,64 @@ CRED_VAR_READ = re.compile(
     + r"|<<<\s*['\"]?\$(?:\{)?(?:env:)?" + _CRED_VAR,
     re.IGNORECASE,
 )
+
+
+# --- Prose arguments vs. path positions ------------------------------------
+# 2026-07-18 false positive: `gh pr create --title "chore: add .env to
+# .gitignore" --body "..."` was blocked. Nothing there reads a file — `.env` is
+# prose inside a message flag. v2 knew exactly one prose carrier (`git commit
+# -m`, handled by the _GIT_SAFE_SUB allowlist), so every other tool taking a
+# message flag inherited the default-deny.
+#
+# The distinction the guard can draw safely is POSITIONAL: the value of an
+# explicitly prose-bearing flag is a message, not a path. Three limits keep this
+# from becoming the permissive regex that would undo the posture:
+#
+#   1. Flag names are an exact allowlist, anchored with (?![\w-]) so `--body`
+#      does NOT match `--body-file` / `--notes-file`. The *-file and -F forms
+#      really do read the named file (posting .env into a PR body is exfil), so
+#      they keep default-deny — same reasoning as the git -F case in round 5.
+#   2. Only a QUOTED value is exempt. An unquoted `--body /home/user/.env` sits
+#      in an ordinary argument position and is indistinguishable from a path.
+#   3. A quoted value containing `$` or a backtick is NOT exempt — it can expand
+#      a secret or substitute a reader into the argument. Those keep flowing to
+#      the normal checks, so `--body "$(cat ~/.env)"` still blocks while
+#      `--body "$(cat notes.md)"` still passes.
+_PROSE_FLAG = (
+    r"--(?:message|title|body|description|desc|notes?|comment|summary"
+    r"|subject|reason|caption)(?![\w-])"
+    r"|(?<![\w-])-m(?![\w-])"
+)
+# Flag, optional `=`, then a single- or double-quoted value (double-quoted form
+# tolerates backslash escapes, matching _split_segments' escape handling).
+_PROSE_FLAG_VALUE = re.compile(
+    r"(?:" + _PROSE_FLAG + r")\s*=?\s*"
+    r"(\"[^\"\\]*(?:\\.[^\"\\]*)*\"|'[^']*')",
+    re.IGNORECASE,
+)
+_EXPANDABLE = re.compile(r"[$`]")
+
+# A credential-shaped var interpolated INTO a prose value publishes the secret
+# (a PR body is a public surface). CRED_VAR_READ only recognises the echo family
+# before a `$VAR`, so this shape was silently allowed before 2026-07-18; found
+# by the regression test written for the false positive above.
+PROSE_FLAG_CRED_VAR = re.compile(
+    r"(?:" + _PROSE_FLAG + r")\s*=?\s*['\"][^'\"]*"
+    r"\$(?:\{)?(?:env:)?" + _CRED_VAR,
+    re.IGNORECASE,
+)
+
+
+def _strip_prose_flag_values(seg):
+    """Blank out the quoted value of prose-bearing flags so a credential-store
+    NAME mentioned in a message isn't read as a path position. Leaves the flag
+    itself, and leaves any value that could expand ($ / backtick), in place."""
+    def _blank(m):
+        value = m.group(1)
+        if _EXPANDABLE.search(value):
+            return m.group(0)
+        return m.group(0).replace(value, '""')
+    return _PROSE_FLAG_VALUE.sub(_blank, seg)
 
 
 # --- Bash/PowerShell command classification --------------------------------
@@ -566,14 +626,23 @@ def main():
             # (round 4 #2). The sensitive-path read check always runs.
             if _GIT_ALIAS_EXEC.search(seg):
                 block(_MSG_GIT)
-            if not _GIT_MSG_CMD.match(seg):
-                if ENV_DUMP_PATTERN.search(seg):
+            # Interpolating a credential var into a message flag publishes it.
+            # Checked on the RAW segment, before prose values are blanked.
+            if PROSE_FLAG_CRED_VAR.search(seg):
+                block(_MSG_VAR)
+            # A prose flag's quoted value is a message, not a path position, so
+            # the remaining checks run against the segment with those values
+            # blanked (2026-07-18 false positive). Expandable values survive the
+            # blanking and are still scanned.
+            scan = _strip_prose_flag_values(seg)
+            if not _GIT_MSG_CMD.match(scan):
+                if ENV_DUMP_PATTERN.search(scan):
                     block(_MSG_ENV)
-                if CRED_VAR_READ.search(seg):
+                if CRED_VAR_READ.search(scan):
                     block(_MSG_VAR)
-                if MCP_GET_PATTERN.search(seg):
+                if MCP_GET_PATTERN.search(scan):
                     block(_MSG_MCP)
-            if _reads_sensitive_path(seg):
+            if _reads_sensitive_path(scan):
                 block(_MSG_PATH)
         sys.exit(0)
 
