@@ -4,6 +4,15 @@
 section of [ADR-001](ADR-001-public-claude-ops-repo.md). The publication
 boundaries in ADR-001 are unchanged and still authoritative.
 
+**Also supersedes:** the canonicality section of
+[`system/SYS-015`](https://github.com/sanlee-ys/architecture/blob/main/decisions/SYS-015-public-claude-ops-repo.md),
+which assigned canonicality *downward* to the private working copies. This is a
+**tier inversion** — a repo-local ADR overriding a system-level decision — and it is
+recorded here explicitly so the reversal is legible from both ends. `SYS-015`'s own
+status line already notes it; this line closes the loop from the side that did the
+overriding. Noted 2026-07-18 during a two-tier decision-log audit, which found the
+inversion was real but only visible from the system tier.
+
 ## Context
 
 ADR-001 made the private working copies the system of record and this repo a
