@@ -134,6 +134,24 @@ branch on the remote. Everything below follows from that one fact.
   pushed should be treated as gone, because from every other session's point
   of view, it is.
 
+- **Stage explicit paths. Never `git add -A`, `git add -u`, `git add .`, or
+  `git commit -a`.** Those stage *whatever is dirty*, not *what this session
+  changed*, and in a working tree that another session is also writing to, the
+  difference is somebody else's half-finished work landing in your commit.
+  Name the files: `git -C <repo> add path/one path/two`, then read
+  `git show --stat HEAD` before pushing.
+
+  This is the one rule here with a **mechanical backstop**:
+  [`hooks/git-staging-guard.py`](hooks/git-staging-guard.py) is a `PreToolUse`
+  hook that blocks those four shapes, with a `STAGE-ALL-OK` per-command
+  override for the cases where whole-tree staging is genuinely right. It exists
+  because the behavioural version of this rule failed twice on 2026-07-18/19 —
+  the second time *after* the first was already a known lesson in the same
+  session, which is what a reflex looks like from the outside. A rule that
+  depends on remembering, under time pressure, in the boring part of the work,
+  is a rule with a known failure rate. The guard is that failure rate written
+  down as code.
+
 A given repo can layer its own version of these rules on top for local
 specifics — its own collision-prone files, its own history of near-misses —
 but the underlying shape (shared remote main as the only coordination point)

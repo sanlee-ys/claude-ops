@@ -55,6 +55,13 @@ nothing and might get the next gap found by a reader instead of a leak.
     `security/README.md` and in the incidents.
   - `README.md` — how the hook is wired in, what it does and doesn't cover,
     and the override convention for legitimate reads it blocks.
+- **`hooks/git-staging-guard.py`** — a `PreToolUse` hook that blocks
+  whole-tree staging (`git add -A|-u|.`, `git commit -a`), so a session cannot
+  sweep a *parallel* session's uncommitted work into an unrelated commit. The
+  interesting constraint is that it must not block prose: the commit messages
+  and postmortems describing the incidents quote those flags verbatim, so it
+  strips heredoc bodies and tokenizes rather than grepping for a flag. Tested
+  both ways in `tests/`.
 - **`incidents/`** — six blameless postmortems, each with a 5-whys and a
   fixes-applied table:
   - `2026-07-02-plaintext-api-key-exposure.md`
