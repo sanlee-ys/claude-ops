@@ -53,14 +53,24 @@ the day:
    looked at it, and this repo's history includes exactly that: an
    uncommitted local fix silently lost because a session on a different
    machine had already moved main first.
-2. **Scan.** Look for open pull requests and remote branches touching the
+2. **Check.** Confirm `main` is green before building on it
+   (`gh run list --branch main --limit 1`, or `gh run list --status failure`
+   across the repos in play). Report a red `main` to the user at the top of
+   the session, unprompted — this is the agent's job, not something the user
+   should be discovering from CI notification mail. Added 2026-07-19, after a
+   decision-log lint failure sat on `architecture`'s `main` and surfaced only
+   because the user happened to read the GitHub emails in his inbox. A
+   scheduled sweep is the wrong instrument for this: scheduled tasks run on
+   the home machine and default to the weekend, so a weekday breakage would
+   sit for days. Pre-flight fires on every machine, every session, same day.
+3. **Scan.** Look for open pull requests and remote branches touching the
    same area before starting. The same fix half-built in two places at once
    is wasted work discovered late, not work saved.
-3. **Claim.** One concern maps to one branch maps to one pull request. If
+4. **Claim.** One concern maps to one branch maps to one pull request. If
    the deliverable doesn't fit in a sentence, it's two pieces of work, not
    one — split it before starting rather than discovering the seam midway
    through a diff.
-4. **Cut** along files nothing else touches. Files that aggregate or
+5. **Cut** along files nothing else touches. Files that aggregate or
    summarize other files (a README, an index, a generated doc) are the
    collision hotspots — serialize those rather than parallelizing across
    them.
